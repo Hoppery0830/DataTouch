@@ -18,6 +18,7 @@
 #include <ESPmDNS.h>
 #include <Preferences.h>
 #include "protocol.h"
+#include "cloud_upload.h"   // 设备上云: HTTPS 上传实验记录 (新增模块; 不改动现有逻辑)
 
 // ------------------- 用户配置 -------------------
 #define CUSTOM_SSID   ""            // 开发用: 未配网也连它(仅 DEV_QUICK_WIFI=1 时生效); 产品请留空
@@ -28,7 +29,7 @@
 
 #define STM32_RX_PIN  18            // 接 STM32 TX (ESP32-S3 UART2 默认 RX)
 #define STM32_TX_PIN  17            // 接 STM32 RX
-#define STM32_BAUD    115200
+#define STM32_BAUD    460800
 
 #define WEB_PORT      80            // HTTP 网页
 #define WS_PORT       81            // WebSocket
@@ -44,6 +45,10 @@ HardwareSerial  STM32(2);           // UART2
 
 TouchFrame      g_frame = {0};
 bool            g_frameNew = false;
+MetricsFrame    g_metrics = {0};   // 最新四维特征 (粗量纲)
+bool            g_metricsNew = false;
+float           g_score = 0.0f;    // 最新综合评分 (0~100, STM32 端给出)
+bool            g_scoreNew = false;
 volatile uint8_t g_state = STATE_IDLE;
 
 // ---- WiFi 配网 / 门户 / mDNS 相关 ----
@@ -66,20 +71,32 @@ const char INDEX_HTML[] = R"rawliteral(<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>织物触觉实时显示</title>
 <style>
-body{font-family:sans-serif;padding:12px;background:#111;color:#ddd}
-canvas{background:#000;width:100%;height:58vh;border:1px solid #333;border-radius:6px}
-.row{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:8px}
-.card{background:#1a1a1a;padding:8px 14px;border-radius:6px;min-width:88px}
-.big{font-size:22px;font-weight:bold}
+body{font-family:sans-serif;padding:12px;background:#111;color:#ddd;max-width:1000px;margin:0 auto}
+canvas{background:#000;border:1px solid #333;border-radius:6px}
+#cv{width:100%;height:46vh}
+.row{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:8px;align-items:flex-start}
+.card{background:#1a1a1a;padding:8px 14px;border-radius:6px;min-width:96px;box-sizing:border-box}
+.big{font-size:22px;font-weight:bold;font-variant-numeric:tabular-nums;display:inline-block;min-width:4ch;text-align:right}
+.md{font-size:16px;font-weight:bold;font-variant-numeric:tabular-nums;display:inline-block;min-width:4ch;text-align:right}
 .hint{color:#888;font-size:12px}
 button{background:#2a6;border:0;color:#fff;padding:8px 14px;border-radius:6px;margin:2px;font-size:14px}
+.radarwrap{text-align:center;margin-top:8px}
+#radar{width:300px;height:300px;display:inline-block}
 </style>
 </head>
 <body>
-<div style="text-align:right;margin-bottom:6px"><a href="/reset" style="color:#888;font-size:12px">重新配网</a></div>
+<div style="text-align:right;margin-bottom:6px"><a href="/cloud" style="color:#2a6;font-size:12px;margin-right:10px">上云配置</a><a href="/reset" style="color:#888;font-size:12px">重新配网</a></div>
 <div class="row">
   <div class="card">状态 <span id="st" class="big">--</span></div>
-  <div class="card">评分 <span id="sc" class="big">--</span></div>
+  <div class="card">综合评分 <span id="composite" class="big">--</span></div>
+  <div class="card">设备评分 <span id="sc" class="md">--</span></div>
+  <div class="card">上云 <span id="cloud" class="md">--</span></div>
+</div>
+<div class="row">
+  <div class="card">柔软度 <span id="d_softness" class="big">--</span></div>
+  <div class="card">顺滑度 <span id="d_smoothness" class="big">--</span></div>
+  <div class="card">细腻度 <span id="d_roughness" class="big">--</span></div>
+  <div class="card">回弹 <span id="d_rebound" class="big">--</span></div>
 </div>
 <div class="row">
   <div class="card">Fx <span id="fx" class="big">0.00</span> N</div>
@@ -99,15 +116,85 @@ button{background:#2a6;border:0;color:#fff;padding:8px 14px;border-radius:6px;ma
 <div><button onclick="cmd('arm')">ARM</button>
        <button onclick="cmd('start')">START</button>
        <button onclick="cmd('stop')">STOP</button>
-       <button onclick="cmd('reset')">RESET</button></div>
-<p class="hint">曲线: 蓝=Fz(法向力) 红=Fx(切向力) 绿=Y(位移)</p>
+       <button onclick="cmd('reset')">RESET</button>
+       <button onclick="upTest()" style="background:#37c">上传测试</button></div>
+<p class="hint" id="upHint">「上传测试」= 用当前四维/评分立刻向云端 POST 一条 source=device 的记录（结果看上方"上云"状态与设备串口）</p>
+<p class="hint">曲线: 蓝=Fz(法向力) 红=Fx(切向力) 绿=Y(位移) ｜ 细腻度: 值越小越细腻, 评分自动取反 ｜ 综合评分由前端按权重融合四维特征得出</p>
 <canvas id="cv"></canvas>
+<div class="radarwrap"><canvas id="radar"></canvas></div>
 <script>
+// ===== 权重与归一化分段 (在线调评分只改这里即可) =====
+const WEIGHTS={softness:0.30,smoothness:0.25,roughness:0.20,rebound:0.25};
+const RANGE={
+  softness:[0.0,1.0],    // 原始粗量纲 -> 0~100 分段; 越大越软
+  smoothness:[0.0,1.0],  // 越大越顺滑
+  roughness:[0.0,1.0],   // 越小越细腻, 归一化时取反
+  rebound:[0.0,1.0]      // 越大回弹越好
+};
+
 const MAX=240, fz=[], fx=[], posY=[];
+let composite=0;   // 前端加权融合出的"综合评分"
 const ws=new WebSocket("ws://"+location.hostname+":81");
 ws.onopen =()=>{document.getElementById('st').textContent='已连接';};
 ws.onclose=()=>{document.getElementById('st').textContent='断开';};
 function cmd(c){ if(ws.readyState==1) ws.send(c); }
+// 设备上云: 手动上传测试 —— 设备端收到 'upload' 后立刻用当前四维/评分 POST 一条测试记录
+function upTest(){
+  cmd('upload');
+  const el=document.getElementById('cloud');
+  el.textContent='已请求'; el.style.color='#ddd';
+}
+
+function clamp01(v){ return v<0?0:(v>1?1:v); }
+// 把某维原始特征映射到 0~100
+function normalize(dim,v){
+  const seg=RANGE[dim]||[0,1];
+  let n=clamp01((v-seg[0])/(seg[1]-seg[0]));
+  if(dim==='roughness') n=1-n;   // 越小越细腻 -> 取反
+  return n*100;
+}
+// 按权重融合四维 -> 综合评分 (返回各维 0~100 得分, 并写入全局 composite)
+function computeScore(m){
+  const dims=['softness','smoothness','roughness','rebound'];
+  const s={}; let sum=0, wsum=0;
+  dims.forEach(d=>{ const sc=normalize(d,m[d]); s[d]=sc; sum+=sc*WEIGHTS[d]; wsum+=WEIGHTS[d]; });
+  composite = wsum>0 ? sum/wsum : 0;
+  return s;
+}
+// 五边形雷达图: 柔软度/顺滑度/细腻度/回弹 + 综合(第5边)
+function drawRadar(s){
+  const c=document.getElementById('radar'), ctx=c.getContext('2d');
+  const dpr=window.devicePixelRatio||1, w=c.clientWidth, h=c.clientHeight;
+  c.width=w*dpr; c.height=h*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,w,h);
+  const cx=w/2, cy=h/2, R=Math.min(w,h)/2-22, maxV=100;
+  const labels=['柔软度','顺滑度','细腻度','回弹','综合'];
+  const vals=[s.softness,s.smoothness,s.roughness,s.rebound,composite];
+  const n=vals.length, ang=i=>(-Math.PI/2 + i*2*Math.PI/n);
+  // 网格环
+  for(let ring=4;ring>=1;ring--){
+    ctx.strokeStyle='rgba(255,255,255,0.12)'; ctx.lineWidth=1; ctx.beginPath();
+    for(let i=0;i<=n;i++){ const a=ang(i%n), rr=R*ring/4;
+      const x=cx+rr*Math.cos(a), y=cy+rr*Math.sin(a);
+      i?ctx.lineTo(x,y):ctx.moveTo(x,y); }
+    ctx.stroke();
+  }
+  // 轴线
+  for(let i=0;i<n;i++){ const a=ang(i);
+    ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.beginPath();
+    ctx.moveTo(cx,cy); ctx.lineTo(cx+R*Math.cos(a), cy+R*Math.sin(a)); ctx.stroke(); }
+  // 数据多边形
+  ctx.strokeStyle='#4af'; ctx.fillStyle='rgba(68,170,255,0.25)'; ctx.lineWidth=2; ctx.beginPath();
+  for(let i=0;i<=n;i++){ const a=ang(i%n), rr=R*vals[i%n]/maxV;
+    const x=cx+rr*Math.cos(a), y=cy+rr*Math.sin(a);
+    i?ctx.lineTo(x,y):ctx.moveTo(x,y); }
+  ctx.closePath(); ctx.stroke(); ctx.fill();
+  // 维度标签
+  ctx.fillStyle='#ddd'; ctx.font='12px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  for(let i=0;i<n;i++){ const a=ang(i), x=cx+(R+16)*Math.cos(a), y=cy+(R+16)*Math.sin(a);
+    ctx.fillText(labels[i], x, y); }
+}
+
 ws.onmessage=e=>{
   const p=e.data.split(',');
   if(p[0]==='DATA'){
@@ -127,7 +214,25 @@ ws.onmessage=e=>{
     const m={0:'空闲',1:'已ARM',2:'采集中',3:'完成',4:'错误'};
     document.getElementById('st').textContent=m[p[1]]||p[1];
   } else if(p[0]==='SCORE'){
+    // 设备端给出的 0~100 综合评分 (仅作参考显示)
     document.getElementById('sc').textContent=(+p[1]).toFixed(0);
+  } else if(p[0]==='METRICS'){
+    // METRICS,softness,smoothness,roughness,rebound,flags
+    const m={softness:+p[1],smoothness:+p[2],roughness:+p[3],rebound:+p[4]};
+    const s=computeScore(m);
+    document.getElementById('d_softness').textContent=s.softness.toFixed(0);
+    document.getElementById('d_smoothness').textContent=s.smoothness.toFixed(0);
+    document.getElementById('d_roughness').textContent=s.roughness.toFixed(0);
+    document.getElementById('d_rebound').textContent=s.rebound.toFixed(0);
+    document.getElementById('composite').textContent=composite.toFixed(0);
+    drawRadar(s);
+  } else if(p[0]==='CLOUD'){
+    // 设备上云状态: CLOUD,<事件>,<说明>  事件 = CFG/ENQ/SEND/OK/FAIL/OFF/DROP
+    const cm={CFG:'已配置',ENQ:'已入队',SEND:'上传中',OK:'✓ 成功',FAIL:'✗ 失败',OFF:'离线等待',DROP:'队列满'};
+    let d=p[2]||''; if(d.length>44) d=d.slice(0,44)+'…';
+    const el=document.getElementById('cloud');
+    el.textContent=(cm[p[1]]||p[1])+(d?(' '+d):'');
+    el.style.color = (p[1]==='OK') ? '#3c3' : (p[1]==='FAIL' ? '#f88' : '#ddd');
   }
 };
 function draw(){
@@ -191,7 +296,120 @@ button{width:100%;margin-top:18px;padding:13px;background:#2a6;color:#fff;border
 </body>
 </html>)rawliteral";
 
+// ------------------- 内嵌"上云配置"页 -------------------
+// GET /cloud 返回: 免重新烧录即可改 token / fabricName / deviceId (写 NVS, 立即生效)
+// 风格与 CONFIG_HTML 保持一致: 深色卡片 + 大字号 + 移动端友好
+// %TOKEN% / %TOKENMASK% / %FABRIC% / %DEVICE% 由 handleCloudPage() 替换后下发
+const char CLOUD_CFG_HTML[] = R"rawliteral(<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>上云配置</title>
+<style>
+body{font-family:sans-serif;padding:20px;background:#111;color:#ddd;max-width:420px;margin:0 auto}
+h2{margin-top:8px}
+label{display:block;margin-top:14px;font-size:14px;color:#bbb}
+input{width:100%;padding:11px;margin-top:5px;box-sizing:border-box;font-size:16px;border-radius:6px;border:1px solid #444;background:#1a1a1a;color:#fff}
+button{width:100%;margin-top:18px;padding:13px;background:#2a6;color:#fff;border:0;border-radius:8px;font-size:16px}
+a{color:#2a6}
+.hint{color:#888;font-size:12px;margin-top:6px}
+.top{text-align:right;margin-bottom:4px}
+</style>
+</head>
+<body>
+<div class="top"><a href="/">← 返回主页</a></div>
+<h2>☁ 上云配置</h2>
+<p class="hint">改完点保存即写入设备 NVS，立即生效，无需重新烧录、无需重启。</p>
+<form method="POST" action="/cloud/config">
+  <label>Token（云端校验密钥）
+    <input name="token" type="password" value="%TOKEN%" autocomplete="off" placeholder="留空则保持原值">
+  </label>
+  <p class="hint">当前 token：%TOKENMASK%</p>
+  <label>布料名称 fabricName
+    <input name="fabricName" value="%FABRIC%" autocomplete="off" placeholder="例如 莫代尔-180g">
+  </label>
+  <label>设备 ID deviceId
+    <input name="deviceId" value="%DEVICE%" autocomplete="off" placeholder="例如 esp32-dev01">
+  </label>
+  <p class="hint">上传地址(固定, 编译期配置)：<span id="u"></span></p>
+  <button type="submit">保存</button>
+</form>
+</body>
+</html>)rawliteral";
+
+// token 脱敏: 只显示前 4 位
+static String maskTokenForHtml(const String &t) {
+  if (t.length() == 0) return "(未设置)";
+  if (t.length() <= 4) return "****";
+  return t.substring(0, 4) + "****";
+}
+
+// HTML 属性值转义 (配置里可能出现引号/尖括号)
+static String htmlEsc(const String &s) {
+  String o = s;
+  o.replace("&", "&amp;");
+  o.replace("\"", "&quot;");
+  o.replace("<", "&lt;");
+  o.replace(">", "&gt;");
+  return o;
+}
+
+// GET /cloud —— 下发配置页(表单回显当前值)
+void handleCloudPage() {
+  CloudConfig c = cloudUploadGetConfig();      // 读回当前配置
+  String html;
+  html.reserve(strlen(CLOUD_CFG_HTML) + 256);  // 预留, 避免多次重分配
+  html = CLOUD_CFG_HTML;
+  html.replace("%TOKEN%",      htmlEsc(c.token));
+  html.replace("%TOKENMASK%",  maskTokenForHtml(c.token));
+  html.replace("%FABRIC%",     htmlEsc(c.fabricName));
+  html.replace("%DEVICE%",     htmlEsc(c.deviceId));
+  html.replace("<span id=\"u\"></span>", "<span id=\"u\">" + htmlEsc(c.url) + "</span>");
+  server.send(200, "text/html", html);
+}
+
+// POST /cloud/config —— 解析表单 → 写 NVS → 返回"已保存"提示页(新值回显, token 脱敏)
+void handleCloudConfigSave() {
+  CloudConfig cur = cloudUploadGetConfig();    // 保留原有 url / deviceId / fabricName
+  String token  = server.arg("token");
+  String fabric = server.arg("fabricName");
+  String devid  = server.arg("deviceId");
+  token.trim();
+  fabric.trim();
+  devid.trim();
+
+  // token 密码框: 留空表示"不修改"(浏览器不回显密码时的常见做法)
+  if (token.length() == 0) token = cur.token;
+  if (fabric.length() == 0) fabric = cur.fabricName;
+  if (devid.length() == 0)  devid  = cur.deviceId;
+
+  cloudUploadSetConfig(cur.url, token, devid, fabric);   // 写 NVS + 立即生效
+
+  CloudConfig now = cloudUploadGetConfig();              // 再读回, 保证回显=真实生效值
+  String html;
+  html.reserve(1100);                                    // 预留, 避免多次重分配
+  html = String("<!DOCTYPE html><html><head><meta charset='utf-8'>") +
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<style>body{font-family:sans-serif;background:#111;color:#ddd;padding:30px;text-align:center}"
+    "h3{font-size:30px;color:#3c3;margin:6px 0 14px}p{font-size:22px;line-height:1.8;margin:6px 0}"
+    ".b{color:#fff;font-weight:bold;font-size:20px;word-break:break-all}"
+    ".sub{color:#999;font-size:18px}a{color:#2a6;font-size:22px}</style></head><body>"
+    "<h3>✅ 上云配置已保存</h3>"
+    "<p>布料名称<br><span class='b'>" + htmlEsc(now.fabricName) + "</span></p>"
+    "<p>设备 ID<br><span class='b'>" + htmlEsc(now.deviceId) + "</span></p>"
+    "<p>Token<br><span class='b'>" + maskTokenForHtml(now.token) + "</span></p>"
+    "<p class='sub'>已写入 NVS，无需重启；下一次上传即使用新配置。<br>"
+    "可在设备页点「上传测试」立即验证。</p>"
+    "<p><a href='/'>返回主页</a> ｜ <a href='/cloud'>继续修改</a></p>"
+    "</body></html>";
+  server.send(200, "text/html", html);
+}
+
 // ------------------- 工具函数 -------------------
+// 把浮点限幅到 [0,1], 供 DEMO 模拟特征/评分使用
+static float clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
+
 static void pushState() {
   char buf[32];
   snprintf(buf, sizeof(buf), "STATUS,%u", (unsigned)g_state);
@@ -209,7 +427,28 @@ static void pushFrame() {
   webSocket.broadcastTXT(buf);
 }
 
+// 推送四维特征 (CSV): METRICS,softness,smoothness,roughness,rebound,flags
+static void pushMetrics() {
+  char buf[80];
+  snprintf(buf, sizeof(buf), "METRICS,%.3f,%.3f,%.3f,%.3f,%u",
+           g_metrics.softness, g_metrics.smoothness,
+           g_metrics.roughness, g_metrics.rebound,
+           (unsigned)g_metrics.flags);
+  webSocket.broadcastTXT(buf);
+}
+
+// 推送综合评分 (CSV): SCORE,<0-100>
+static void pushScore() {
+  char buf[32];
+  snprintf(buf, sizeof(buf), "SCORE,%.1f", g_score);
+  webSocket.broadcastTXT(buf);
+}
+
 static void handleCommand(const String &cmd) {
+  // 设备上云: 网页「上传测试」按钮 -> 用当前 g_metrics/g_score 立刻传一条测试记录
+  // (不影响状态机, 不改变 g_state, 也不转发给 STM32)
+  if (cmd == "upload") { cloudUploadTestNow(); return; }
+
   uint8_t st = g_state;
   if      (cmd == "arm")   st = STATE_ARMED;
   else if (cmd == "start") st = STATE_RUNNING;
@@ -310,13 +549,17 @@ void dispatchFrame(uint8_t type, const uint8_t *pl, uint8_t len) {
       if (len >= 1) g_state = pl[0];
       break;
     case FRAME_METRICS:
-      // 预留: 分项指标, 后续再定义结构
+      // 四维特征向量: 存最新值, 由推送循环统一广播 (METRICS 消息)
+      if (len >= sizeof(MetricsFrame)) {
+        memcpy(&g_metrics, pl, sizeof(MetricsFrame));
+        g_metricsNew = true;
+      }
       break;
     case FRAME_SCORE:
-      if (len >= 4) {
-        float sc; memcpy(&sc, pl, 4);
-        char buf[32]; snprintf(buf, sizeof(buf), "SCORE,%.1f", sc);
-        webSocket.broadcastTXT(buf);
+      // 综合评分 0~100: 存最新值, 由推送循环统一广播 (SCORE 消息)
+      if (len >= sizeof(float)) {
+        memcpy(&g_score, pl, sizeof(float));
+        g_scoreNew = true;
       }
       break;
     default:
@@ -328,7 +571,12 @@ void dispatchFrame(uint8_t type, const uint8_t *pl, uint8_t len) {
 // 模拟一次"按压->保压->滑动->抬起"
 void demoStep() {
   static float t = 0, z = 0, fz = 0, x = 0;
-  const float dt = 1.0f / PUSH_HZ;
+  static uint32_t lastMs = 0;
+  uint32_t nowMs = millis();
+  float dt = (float)(nowMs - lastMs) / 1000.0f;
+  if (lastMs == 0) dt = 1.0f / PUSH_HZ;  // 首次
+  lastMs = nowMs;
+  if (dt > 0.2f) dt = 0.2f;              // 防大跳变
   t += dt;
 
   float tFz = 0, tX = 0;
@@ -350,6 +598,24 @@ void demoStep() {
   g_frame.Mx = 0.0f; g_frame.My = 0.0f; g_frame.Mz = 0.0f; // 力矩默认 0
   g_frame.contact = (fz > 0.1f) ? 1 : 0;
   g_frameNew = true;
+
+  // ---- 模拟四维特征 + 综合评分 (供网页实时画雷达图/评分) ----
+  // 值随"按压->保压->滑动->抬起"过程连续变化, 量纲为 0~1 的粗量纲, 归一化在 JS 端做。
+  g_metrics.softness   = clamp01(0.55f + 0.35f * (fz / 2.0f));          // 按压越深越"软"
+  g_metrics.smoothness = clamp01(0.90f - 0.55f * (fx / (fz + 0.05f)));  // 摩擦越小越顺滑
+  g_metrics.roughness  = clamp01(0.25f + 0.35f * fabsf(sinf(2 * PI * 8 * t))); // 力纹波越大越粗糙(值小=细腻)
+  g_metrics.rebound    = clamp01(0.45f + 0.45f * (z / 2.0f));           // 回弹贴合随压缩度升高
+  g_metrics.flags      = 0x01;                                          // bit0: 数据有效
+  g_metricsNew = true;
+
+  // 综合评分 (STM32 端给出的 0~100; 此处按四维权重做近似, 让数字可信)
+  // 注意: 网页端(JS)会再按它自己的权重做一次融合, 这里的 g_score 为"设备端评分"参考。
+  float fused = 0.30f * g_metrics.softness
+              + 0.25f * g_metrics.smoothness
+              + 0.20f * (1.0f - g_metrics.roughness)   // 细腻度高(粗糙度小) → 加分
+              + 0.25f * g_metrics.rebound;
+  g_score = fused * 100.0f;
+  g_scoreNew = true;
 }
 
 // ------------------- WiFi 配置处理 -------------------
@@ -366,24 +632,57 @@ void handleConfig() {
   prefs.putString("pass", pass);
   prefs.putBool("force", false);   // 清除强制配网标志, 下次开机正常连网
   prefs.end();
-  Serial.printf("[CONFIG] 已保存 WiFi: %s, 正在重启连接...\n", ssid.c_str());
-  // 保存成功后: 设备会连上该 WiFi 并自动关闭热点, 所以这里无法跨网络自动跳转, 用提示
-  server.send(200, "text/html",
-              "<!DOCTYPE html><html><head><meta charset=utf-8>"
-              "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-              "<style>body{font-family:sans-serif;background:#111;color:#ddd;padding:30px;text-align:center}"
-              "h3{font-size:30px;color:#3c3;margin:6px 0 14px}"
-              "p{font-size:22px;line-height:1.8;margin:6px 0}"
-              ".big{font-size:36px;color:#fff;font-weight:bold;word-break:break-all;margin:20px 0}"
-              ".sub{color:#999;font-size:18px}</style></head><body>"
-              "<h3>✅ 已保存，正在连接…</h3>"
-              "<p>设备已连接你的 WiFi，<b>热点已关闭</b>。</p>"
-              "<p>请让手机连接<b>同一个 WiFi</b>，然后打开：</p>"
-              "<div class='big'>http://datatouch.local/</div>"
-              "<p class='sub'>若打不开，请用设备串口显示的 IP 访问。</p>"
-              "</body></html>");
-  delay(800);
-  ESP.restart();
+  Serial.printf("[CONFIG] 已保存 WiFi: %s\n", ssid.c_str());
+
+  // 就地切换为 APSTA(保持热点, 手机仍能访问), 同时连接 WiFi, 以便把"真实网站地址(IP)"显示给用户
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  Serial.print("连接中: ");
+  unsigned t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 12000) {
+    delay(200); Serial.print(".");
+  }
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    g_provisioning = false;
+    String ip = WiFi.localIP().toString();
+    g_bindIP = WiFi.localIP();
+    Serial.print("已连接, 网站地址: http://");
+    Serial.println(ip);
+    MDNS.begin("datatouch");   // 顺带让 datatouch.local 也可用(用户可选, 非必须)
+
+    // 保存成功页: 直接显示真实 IP, 用户照着打开即可
+    server.send(200, "text/html",
+                "<!DOCTYPE html><html><head><meta charset=utf-8>"
+                "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                "<style>body{font-family:sans-serif;background:#111;color:#ddd;padding:30px;text-align:center}"
+                "h3{font-size:30px;color:#3c3;margin:6px 0 14px}p{font-size:22px;line-height:1.8;margin:6px 0}"
+                ".big{font-size:36px;color:#fff;font-weight:bold;word-break:break-all;margin:20px 0}"
+                ".sub{color:#999;font-size:18px}</style></head><body>"
+                "<h3>✅ 已连接到 WiFi</h3>"
+                "<p>请让你的手机连接<b>同一个 WiFi</b>，然后打开：</p>"
+                "<div class='big'>http://" + ip + "/</div>"
+                "<p class='sub'>热点已关闭；若打不开，也可试 http://datatouch.local/</p>"
+                "</body></html>");
+    // 稍等让页面发出, 再关闭热点 -> 设备进入纯 STA
+    delay(1200);
+    WiFi.mode(WIFI_STA);
+  } else {
+    // 连不上: 保持配网(热点开着), 提示重试
+    g_provisioning = true;
+    Serial.println("连接失败, 保持配网模式");
+    server.send(200, "text/html",
+                "<!DOCTYPE html><html><head><meta charset=utf-8>"
+                "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                "<style>body{font-family:sans-serif;background:#111;color:#ddd;padding:30px;text-align:center}"
+                "h3{font-size:30px;color:#f80;margin:6px 0 14px}p{font-size:22px;line-height:1.8;margin:6px 0}"
+                ".sub{color:#999;font-size:18px}</style></head><body>"
+                "<h3>❌ 连接失败</h3>"
+                "<p>请检查 WiFi 名称和密码后，返回重新配网。</p>"
+                "</body></html>");
+  }
+  // 不调用 ESP.restart(), 就地完成切换
 }
 
 void handleReset() {
@@ -501,6 +800,10 @@ void setup() {
   });
   server.on("/config", HTTP_POST, handleConfig);
   server.on("/reset", HTTP_GET, handleReset);
+  // ---- 新增: 设备网页上的「上云配置」入口 (免重烧改 token/fabricName/deviceId) ----
+  // 只"追加"路由, 上面 / 与 /config、下面的 onNotFound 门户重定向逻辑均未改动
+  server.on("/cloud", HTTP_GET, handleCloudPage);
+  server.on("/cloud/config", HTTP_POST, handleCloudConfigSave);
   // 门户探测(苹果/安卓 captive portal 检测URL)重定向到本机首页 -> 自动弹出
   server.onNotFound([]() {
     String url = String("http://") + g_bindIP.toString() + "/";
@@ -509,9 +812,28 @@ void setup() {
   });
   server.begin();
 
+  // ---- 设备上云 (HTTPS 上传实验记录) ----
+  // 只新增调用: 读 NVS 配置 / 恢复断网队列 / 启动 SNTP; 不影响配网、WebSocket、显示页
+  // 状态回调: 把上传结果以 "CLOUD,<事件>,<说明>" 广播给网页, 便于浏览器里一键验证
+  cloudUploadSetNotifyCallback([](const char *msg) { webSocket.broadcastTXT(msg); });
+  cloudUploadInit();
+
+  // ---- SNTP 时间同步 (startedAt 需要 epoch 毫秒; 未同步时不发错误数字) ----
+  // 放在 WiFi 模式确定之后: 已连 WiFi(STA/APSTA) 时发起同步; 纯 AP 配网模式下没有外网,
+  // 但 configTime() 本身无害, 等用户在 /config 里配好 WiFi 连上后会自动同步成功。
+  cloudUploadSntpSync();
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("[SNTP] 已发起时间同步(ntp.aliyun.com/ntp.ntsc.ac.cn/pool.ntp.org)，"
+                   "约 1~3 秒后生效；同步状态见下方循环日志与 [CLOUD] 初始化日志");
+  } else {
+    Serial.println("[SNTP] 当前未连 WiFi(配网中)：暂无法同步时间，配好网后自动重试");
+  }
+
   Serial.printf("配网/显示地址: http://%s/  |  WebSocket: ws://%s:%d\n",
                 ip.toString().c_str(),
                 ip.toString().c_str(), WS_PORT);
+  Serial.printf("上云配置页  : http://%s/cloud  (免重烧改 token/fabricName/deviceId)\n",
+                ip.toString().c_str());
 }
 
 // ------------------- loop -------------------
@@ -529,9 +851,54 @@ void loop() {
   static uint32_t lastPush = 0;
   uint32_t now = millis();
   uint32_t period = 1000UL / PUSH_HZ;
-  if (g_frameNew && (now - lastPush) >= period) {
+  // 按 PUSH_HZ 节拍, 把最新的 曲线/特征/评分 广播给网页 (有新数据才发)
+  if ((now - lastPush) >= period) {
     lastPush = now;
-    pushFrame();
-    g_frameNew = false;
+    if (g_frameNew)   { pushFrame();   g_frameNew = false; }
+    if (g_metricsNew) { pushMetrics(); g_metricsNew = false; }
+    if (g_scoreNew)   { pushScore();   g_scoreNew = false; }
   }
+
+  // ---- 设备上云 (放 loop 末尾, 非阻塞; 只在到期且有网时做一次有界超时的 POST) ----
+  // 状态沿检测: 只在 g_state "变化" 的那一拍做一次, 不会每轮 loop 重复触发
+  static uint8_t lastCloudState = STATE_IDLE;
+  if (g_state != lastCloudState) {
+    // 进入运行态的状态沿: 记录"实验开始时刻"(之后上传的 startedAt 用它)
+    if (g_state == STATE_RUNNING) {
+      cloudUploadNoteRunningEdge();
+    }
+    lastCloudState = g_state;
+    if (g_state == STATE_DONE) {
+      Serial.println("[CLOUD] 检测到实验结束(STATE_DONE), 组包入队");
+      cloudUploadEnqueueCurrent();   // 用当前 g_metrics/g_score 组包入队 (稍后由 cloudUploadLoop 上传)
+    }
+  }
+
+  // ---- SNTP 同步状态: 同步成功时打印一次(13 位 epoch 毫秒), 之后每 60s 报一次当前时间 ----
+  // (便于串口确认 startedAt 的基准是真实绝对时间; 不影响任何既有功能)
+  // 若开机时是 AP 配网模式, 用户配好网连上后这里会再发起一次同步(每 10s 最多一次, 内部限流)
+  static bool     sntpOkLogged = false;
+  static uint32_t sntpLogMs    = 0;
+  static bool     sntpAfterWifi = false;
+  if (cloudUploadTimeSynced()) {
+    if (!sntpOkLogged) {
+      sntpOkLogged = true;
+      Serial.printf("[SNTP] ✓ 同步成功: epochMs=%llu (startedAt 将使用该时间基准)\n",
+                    (unsigned long long)cloudUploadNowMs());
+      sntpLogMs = now;
+    } else if ((now - sntpLogMs) >= 60000UL) {
+      sntpLogMs = now;
+      Serial.printf("[SNTP] 当前时间 epochMs=%llu\n",
+                    (unsigned long long)cloudUploadNowMs());
+    }
+  } else if (cloudUploadIsOnline()) {
+    // 时间还无效但有网了(例如刚配网成功): 再发起一次同步; 成功后 _sntpSyncLogged 会打印出来
+    if (!sntpAfterWifi) {
+      sntpAfterWifi = true;
+      Serial.println("[SNTP] 检测到网络已就绪但时间未同步, 重新发起 SNTP 同步");
+    }
+    cloudUploadSntpSync();     // 内部限流(最短 10s), 不会频繁重启 SNTP
+  }
+
+  cloudUploadLoop();
 }

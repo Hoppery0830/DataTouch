@@ -56,6 +56,29 @@ struct TouchFrame {
 // 载荷字段个数 (不含 contact 的 float 数量)
 constexpr size_t DATA_FLOAT_CNT = 10;
 
+// ---- 负载结构：FRAME_METRICS 四维特征向量 ----
+// 四维 = STM32 归一化后的 [0,1] 值; 综合评分(0-100)也在 STM32 上计算, 是权威值;
+// 前端(网页/小程序)只负责显示。DEMO 模式下前端 JS 的加权融合仅为演示, 不代表正式链路。
+// 权重 / 归一化区间可调整, 但正式以 STM32 为准, 前端权重仅用于 DEMO/展示或可选微调。
+// 字段方向 (归一化后 [0,1] 说明):
+//   softness   柔软度   —— [0,1], 值越大越柔软
+//   smoothness 顺滑度   —— [0,1], 值越大越顺滑(摩擦力越小)
+//   roughness  细腻度/粗糙度 —— [0,1], 值越小越细腻 (评分时应取反, 方向注意!)
+//   rebound    回弹贴合度 —— [0,1], 值越大回弹贴合越好
+//   flags      通用标志 —— bit0=数据有效, 其余预留
+#pragma pack(push, 1)
+struct MetricsFrame {
+  float  softness;   // 柔软度       (越大越软)
+  float  smoothness; // 顺滑度       (越大越顺滑)
+  float  roughness;  // 细腻度/粗糙度 (越小越细腻, 评分取反)
+  float  rebound;    // 回弹贴合度    (越大回弹越好)
+  uint8_t flags;     // 标志位: bit0=数据有效
+};
+#pragma pack(pop)
+
+// 四维特征 float 数量 (不含 flags)
+constexpr size_t METRICS_FLOAT_CNT = 4;
+
 // ---- CRC-8 (多项式 0x31, 初值 0xFF) ----
 inline uint8_t crc8_over(const uint8_t *buf, size_t n) {
   uint8_t crc = 0xFF;
