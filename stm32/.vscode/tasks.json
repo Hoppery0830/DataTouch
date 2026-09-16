@@ -1,0 +1,39 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "CMake: Configure Debug",
+            "type": "process",
+            "command": "C:\\ST\\STM32CubeCLT_1.19.0\\CMake\\bin\\cmake.exe",
+            "args": [
+                "--preset",
+                "Debug"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "CMake: Build Debug",
+            "type": "process",
+            "command": "C:\\ST\\STM32CubeCLT_1.19.0\\CMake\\bin\\cmake.exe",
+            "args": [
+                "--build",
+                "--preset",
+                "Debug",
+                "--parallel",
+                "2"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "CMake: Configure Debug",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": []
+        }
+    ]
+}

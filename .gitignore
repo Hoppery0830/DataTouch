@@ -3,3 +3,19 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# STM32 firmware generated artifacts
+stm32/build/
+stm32/Debug/
+stm32/Release/
+stm32/**/*.o
+stm32/**/*.obj
+stm32/**/*.elf
+stm32/**/*.bin
+stm32/**/*.hex
+stm32/**/*.map
+stm32/**/*.d
+stm32/**/*.su
+stm32/**/*.cyclo
+stm32/.cache/
+stm32/.metadata/
