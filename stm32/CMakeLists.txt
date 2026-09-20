@@ -67,6 +67,9 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     # Add user defined libraries
 )
 
+# newlib-nano omits float formatting unless this symbol is retained.
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE -u _printf_float)
+
 # Export firmware images next to the ELF after every successful build.
 add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_OBJCOPY} -O binary

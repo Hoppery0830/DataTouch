@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include "k230_protocol.h"
 
 /* USER CODE END Includes */
 
@@ -103,6 +104,7 @@ typedef struct
 ADC_HandleTypeDef hadc1;
 
 UART_HandleTypeDef huart1;
+UART_HandleTypeDef huart2;
 
 TIM_HandleTypeDef htim2;
 
@@ -201,6 +203,7 @@ static const uint16_t pressure_curve_lut[] =
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART1_UART_Init(void);
+static void MX_USART2_UART_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
@@ -277,9 +280,12 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART1_UART_Init();
+  MX_USART2_UART_Init();
   MX_ADC1_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
+  K230_Protocol_Init(&huart2);
+
   if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK)
   {
     Error_Handler();
@@ -317,6 +323,7 @@ int main(void)
 #if !HALL_ONLY_TEST
     Softness_Process();
 #endif
+    K230_Protocol_Process();
   }
   /* USER CODE END 3 */
 }
@@ -448,12 +455,35 @@ static void MX_USART1_UART_Init(void)
 }
 
 /**
+  * @brief USART2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART2_UART_Init(void)
+{
+  huart2.Instance = USART2;
+  huart2.Init.BaudRate = 115200;
+  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+  huart2.Init.StopBits = UART_STOPBITS_1;
+  huart2.Init.Parity = UART_PARITY_NONE;
+  huart2.Init.Mode = UART_MODE_TX_RX;
+  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
   */
 static void MX_GPIO_Init(void)
 {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
   /* USER CODE BEGIN MX_GPIO_Init_1 */
 
   /* USER CODE END MX_GPIO_Init_1 */
@@ -461,6 +491,15 @@ static void MX_GPIO_Init(void)
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  /* The HW-269 control signal is low before PB0 becomes an output. */
+  HAL_GPIO_WritePin(LIGHT_CTRL_GPIO_Port, LIGHT_CTRL_Pin, GPIO_PIN_RESET);
+
+  GPIO_InitStruct.Pin = LIGHT_CTRL_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(LIGHT_CTRL_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -1099,6 +1138,14 @@ static void UART_Queue_Bytes(const uint8_t *data, uint16_t length)
   }
   __HAL_UART_ENABLE_IT(&huart1, UART_IT_TXE);
   __enable_irq();
+}
+
+void Debug_UART1_Write(const uint8_t *data, uint16_t length)
+{
+  if ((data != NULL) && (length > 0U))
+  {
+    UART_Queue_Bytes(data, length);
+  }
 }
 
 static void Print_Debug_Data(uint32_t time_ms)

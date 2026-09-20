@@ -202,6 +202,7 @@ void SysTick_Handler(void)
 
 extern TIM_HandleTypeDef htim2;
 extern UART_HandleTypeDef huart1;
+extern UART_HandleTypeDef huart2;
 
 void USART1_IRQHandler(void)
 {
@@ -222,6 +223,11 @@ void USART1_IRQHandler(void)
       __HAL_UART_DISABLE_IT(&huart1, UART_IT_TXE);
     }
   }
+}
+
+void USART2_IRQHandler(void)
+{
+  HAL_UART_IRQHandler(&huart2);
 }
 
 void TIM2_IRQHandler(void)

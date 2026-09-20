@@ -63,6 +63,9 @@ extern uint8_t uart_tx_queue[UART_TX_QUEUE_SIZE];
 extern volatile uint16_t uart_tx_head;
 extern volatile uint16_t uart_tx_tail;
 
+#define LIGHT_CTRL_Pin GPIO_PIN_0
+#define LIGHT_CTRL_GPIO_Port GPIOB
+
 /* USER CODE END EM */
 
 /* Exported functions prototypes ---------------------------------------------*/
@@ -78,6 +81,7 @@ extern SoftnessResult_t softness_result;
 
 /* Convert Hall voltage to distance using the manual LUT interpolation. */
 float Hall_GetDistanceMm(uint16_t hall_mv);
+void Debug_UART1_Write(const uint8_t *data, uint16_t length);
 
 /* USER CODE END EFP */
 

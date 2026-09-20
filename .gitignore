@@ -19,3 +19,9 @@ stm32/**/*.su
 stm32/**/*.cyclo
 stm32/.cache/
 stm32/.metadata/
+
+# K230 host caches and device result files
+k230/**/__pycache__/
+k230/**/*.pyc
+k230/data_touch_results/
+k230/artifacts/
