@@ -10,22 +10,44 @@
 //  设计原则（与现有工程的关系）：
 //    · 只新增文件，不改协议（src/protocol.h 零改动）、不改 STM32；
 //    · 不改 WiFi 配网 / WebSocket / 内嵌显示页 / DEMO 逻辑；
-//    · main.cpp 只需 4 处小改动：include、setup() 调 cloudUploadInit()、
-//      loop() 调 cloudUploadLoop()（+ STATE_DONE 入队一次）、
+//    · main.cpp 只需 5 处小改动：include、setup() 调 cloudUploadInit()、
+//      loop() 里 STATE_DONE 入队一次 + 排空"网页广播队列"、
+//      新建 cloudTask(core 0) 周期调 cloudUploadLoop()、
 //      handleCommand() 增加 "upload" 命令（网页「上传测试」按钮）。
 //    · 全部 I/O 超时有界（连接/发送各 ≤ 6s），退避用 millis() 计时，
-//      loop() 里不使用长 delay()，不阻塞网页/WebSocket 的正常推送。
+//      不在主 loop 里做 HTTPS，不阻塞网页/WebSocket 的正常推送。
 //    · startedAt = "实验开始时刻"的 epoch 毫秒（13 位 JSON number）：
 //      main.cpp 在 g_state 进入 STATE_RUNNING 的状态沿调
 //      cloudUploadNoteRunningEdge() 记录；入队时由 cloudUploadResolveStartedAt()
 //      把它换算成绝对时间。从未运行过（如 DEMO 直接 STOP）时回退"入队时刻"。
 //
+//  ============================================================
+//  线程模型（V2 并发重构，务必遵守）
+//  ------------------------------------------------------------
+//    · 主 loop（core 1，loopTask）：
+//        调用 cloudUploadEnqueueCurrent() / cloudUploadTestNow() / cloudUploadEnqueue()
+//        入队，调用 cloudUploadGetConfig() / SetConfig() 读写配置，
+//        并 **独占** 操作 WebSocketsServer（broadcastTXT）。
+//    · cloudTask（core 0，main.cpp 里用 xTaskCreatePinnedToCore 创建）：
+//        周期调用 cloudUploadLoop() 推进上传状态机（HTTPS 在这里阻塞，不再拖慢主 loop）。
+//    · 模块内部：配置(s_cfg) / 环形队列(s_queue,s_head,s_count,s_seq,s_dropped) /
+//        状态机(s_state,s_nextAttemptMs,s_failCount) / 最近结果 / NVS(s_prefs)
+//        由一把互斥量保护，临界区只碰 RAM/NVS（毫秒级），**绝不**在持锁期间做网络 I/O
+//        或等 SNTP —— 都是"锁内取副本 → 解锁 → 发网络 → 再加锁回写"。
+//    · 通知回调可能从 cloudTask 线程触发，因此回调实现里 **不能** 直接调用
+//        webSocket.broadcastTXT()；main.cpp 的做法是"回调只把消息投进 FreeRTOS 队列，
+//        由主 loop 取出后再广播"，从而保证 WebSocketsServer 永远单线程访问。
+//  ============================================================
+//
 //  使用示例（main.cpp）：
-//    setup():  cloudUploadSetNotifyCallback(cb);  // 可选：把上传状态广播给网页
+//    setup():  xQueueCreate(...) 建"网页广播队列"
+//              cloudUploadSetNotifyCallback(cb);  // cb 里只做 xQueueSend
 //              cloudUploadInit();                 // 读 NVS 配置 + 恢复队列 + 启动 SNTP
+//              xTaskCreatePinnedToCore(cloudTask, … , 0);  // 必须在 Init 之后
 //    loop():   if (g_state == STATE_DONE 的状态沿) cloudUploadEnqueueCurrent();
 //              if (g_state == STATE_RUNNING 的状态沿) cloudUploadNoteRunningEdge();
-//              cloudUploadLoop();                 // 推进上传状态机（非阻塞）
+//              drainCloudWsQueue();               // 主 loop 内 broadcastTXT
+//    cloudTask(): cloudUploadLoop(); vTaskDelay(...);   // 推进上传状态机
 //    网页命令: cloudUploadTestNow();              // 用当前 g_metrics/g_score 立刻传一条
 //    网页路由: GET /cloud + POST /cloud/config   // 免重烧改 token/fabricName/deviceId
 // ============================================================
@@ -154,19 +176,29 @@ typedef void (*CloudNotifyCallback)(const char *msg);
 
 // ============================================================
 //  对外接口
+//  ------------------------------------------------------------
+//  线程安全说明（V2）：以下接口内部均已做互斥保护，可从主 loop(core 1) 或
+//  cloudTask(core 0) 安全调用；唯一约束见 cloudUploadLoop() 的注释。
+//  ⚠ 例外：通知回调（CloudNotifyCallback）可能运行在 cloudTask 线程，
+//     实现里不得直接操作 WebSocketsServer / WebServer。
 // ============================================================
 
 // 初始化：读 NVS 配置（无则用编译期默认值并写回 NVS）、恢复断电前的队列、启动 SNTP。
-// 在 setup() 里 WiFi / WebSocket / HTTP 就绪后调用一次。
+// 在 setup() 里 WiFi / WebSocket / HTTP 就绪后调用一次；**必须早于 cloudTask 的创建**
+//（互斥量在这里创建，先建锁再起云任务）。
 void cloudUploadInit();
 
 // 入队一条实验记录（显式传值）。返回 true = 已成功入队（不代表已上传成功）。
+// 由主 loop 调用（会读 g_metrics/g_score 的快照并立刻冻结 JSON）。
 bool cloudUploadEnqueue(const CloudRecord &rec);
 
 // 入队一条实验记录（用当前 g_metrics / g_score 组包；即 STATE_DONE / 「上传测试」用的入口）
 bool cloudUploadEnqueueCurrent(const char *op = nullptr);
 
-// 在 loop() 里调用：推进上传状态机（非阻塞；仅在到期时做一次有界超时的 HTTPS POST）
+// 推进上传状态机（内部仅在到期且有网时做一次有界超时的 HTTPS POST）。
+// ⚠ 调用线程约定：请在 **cloudTask（core 0）** 里周期调用（每轮 20~50ms + vTaskDelay）。
+//    主 loop 不再调用它 —— HTTPS 的阻塞时间（连接 ≤6s / TLS ≤8s / 响应 ≤6s）
+//    只会占用 core 0 上的云任务，UART 接收与 WebSocket 推送照常。
 void cloudUploadLoop();
 
 // 立刻用当前 g_metrics / g_score 传一条测试记录（网页「上传测试」按钮 / 串口命令）

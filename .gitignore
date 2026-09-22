@@ -25,3 +25,13 @@ k230/**/__pycache__/
 k230/**/*.pyc
 k230/data_touch_results/
 k230/artifacts/
+
+# 嵌套的重复工作副本（同一远端的另一份 clone，勿提交）
+DataTouch/
+
+# 备份/临时文件
+*.bak
+*.before_fix.bak
+
+# SEGGER J-Link user-specific debug settings
+*.jdebug.user

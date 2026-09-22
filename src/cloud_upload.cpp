@@ -8,6 +8,17 @@
 //  · 幂等：dedupId = deviceId-millis-seq（seq 落 NVS，重启不重号）
 //  · 非阻塞：loop() 里不用长 delay()，退避靠 millis() 计时；
 //            仅当"到期且有网"时做一次 HTTP 调用（连接/发送各 ≤ 6s）
+//
+//  · 并发（V2 重构）：本模块的状态机现由 main.cpp 的独立任务 cloudTask（core 0）推进，
+//    而"入队 / 改配置 / 读配置"仍由主 loop（core 1）发起，两个任务会同时访问
+//    配置(s_cfg)、环形队列(s_queue/s_head/s_count)、状态机(s_state/s_nextAttemptMs…)
+//    和 NVS(s_prefs) → 统一用一把互斥量 s_mtx 保护。
+//    ⚠ 铁律：临界区里只允许碰 RAM/NVS（微秒~毫秒级），
+//      **绝不**在持锁期间做 HTTPS/TLS 网络调用，也不在持锁期间等 SNTP(最长 1.5s)。
+//      做法：锁内取"待发 JSON 副本 / 配置副本 / 计数"，解锁后再发；发完再加锁回写状态。
+//
+//  · 通知回调（→ 网页广播）可能从 cloudTask 线程被调用，
+//    所以 main.cpp 注册的回调只做"投递 FreeRTOS 队列"，真正的 broadcastTXT 由主 loop 执行。
 // ============================================================
 #include "cloud_upload.h"
 
@@ -16,6 +27,8 @@
 #include <HTTPClient.h>
 #include <time.h>
 #include <esp_timer.h>   // esp_timer_get_time(): 开机以来微秒, 用于推算毫秒子秒部分
+#include <freertos/FreeRTOS.h>    // 并发重构: 互斥量
+#include <freertos/semphr.h>
 
 // ------------------------------------------------------------
 //  main.cpp 里的"当前实验数据"（只引用、不定义；这样不必改动 main.cpp 的结构）
@@ -49,6 +62,10 @@ bool         s_offlineLogged = false;    // 离线提示只打一次，避免刷
 String       s_lastResult = "无";        // 最近一次上传结果
 CloudNotifyCallback s_notify = nullptr;  // 状态回调（→ 网页广播）
 
+// ---- 并发保护（主 loop 与 cloudTask 共享以上所有状态）----
+// 一把互斥量即可：临界区都很短，且队列/配置/状态机之间有"要么一起改"的耦合关系。
+SemaphoreHandle_t s_mtx = nullptr;
+
 // ---- 时间 / 实验开始时刻 ----
 uint32_t     s_sntpLastReqMs   = 0;      // 上次调 configTime() 的时刻（限流用）
 bool         s_sntpSyncLogged  = false;  // "同步成功"只打印一次
@@ -57,6 +74,32 @@ uint32_t     s_expStartMillis  = 0;      // 实验开始时刻的单调时钟（
 uint64_t     s_expStartEpochMs = 0;      // 实验开始时刻的 epoch 毫秒（记录时若已同步则直接有值）
 
 }  // namespace
+
+// ============================================================
+//  并发原语：一把互斥量 + 加解锁
+//  ------------------------------------------------------------
+//  创建点固定在 cloudUploadInit()；main.cpp 的顺序是
+//    cloudUploadInit()  →  xTaskCreatePinnedToCore(cloudTask…)
+//  即"先建锁、再起云任务"，因此不存在两任务同时创建锁的竞态。
+//  加锁失败（s_mtx 尚未创建，只有极早期调用可能遇到）时按"无锁"继续，
+//  保证不因为重构把原有单线程流程卡死。
+// ============================================================
+static void cloudMutexEnsure() {
+  if (s_mtx == nullptr) s_mtx = xSemaphoreCreateMutex();
+}
+
+static inline void cloudLock()   { if (s_mtx) xSemaphoreTake(s_mtx, portMAX_DELAY); }
+static inline void cloudUnlock() { if (s_mtx) xSemaphoreGive(s_mtx); }
+
+// 锁内取一份配置副本：调用方拿到副本后立刻解锁，后续组包/HTTPS 都用副本 →
+// 既不会读到"改配置改到一半"的状态，也不会持锁做阻塞网络操作。
+static CloudConfig cloudCfgSnapshot() {
+  cloudLock();
+  if (!s_nvsReady) { s_prefs.begin("cloud", false); s_nvsReady = true; }  // NVS 延迟打开(见 nvsBegin)
+  CloudConfig c = s_cfg;
+  cloudUnlock();
+  return c;
+}
 
 // ============================================================
 //  小工具
@@ -138,6 +181,8 @@ static String brief(const String &s, size_t maxLen = 200) {
 
 // ============================================================
 //  队列（环形 + NVS 持久化）
+//  ⚠ 本节的 4 个函数都只允许在 **持锁（cloudLock）** 状态下调用：
+//    它们会改 s_head/s_count/s_queue 与 NVS，必须与另一线程的读/写互斥。
 // ============================================================
 
 static String keyOf(uint8_t slot) {           // NVS 键名: q0..q15（键长 ≤15 字符）
@@ -174,7 +219,7 @@ static void queuePush(const String &body) {
   queuePersistMeta();
 }
 
-static bool queuePeek(String &out) {
+static bool queuePeek(String &out) {           // [须持锁] 只读队首（取副本）
   if (s_count == 0) return false;
   out = s_queue[s_head];
   return out.length() > 0;
@@ -195,11 +240,12 @@ static void queuePop() {
 // ============================================================
 
 // 唯一幂等键：deviceId-millis-seq（seq 落 NVS 单调递增 → 重启后也不会重号）
-static void makeDedupId(char *out, size_t n) {
+// [须持锁] 会写 s_seq 与 NVS
+static void makeDedupId(const CloudConfig &cfg, char *out, size_t n) {
   s_seq++;
   s_prefs.putUInt("seq", s_seq);
   snprintf(out, n, "%s-%lu-%lu",
-           s_cfg.deviceId.c_str(),
+           cfg.deviceId.c_str(),
            (unsigned long)millis(),
            (unsigned long)s_seq);
 }
@@ -209,12 +255,15 @@ static void makeDedupId(char *out, size_t n) {
 //  "rebound","composite","metricsNormalized":true,"weights"{...},"curveRef":"",
 //  "dedupId","startedAt","source":"device"}
 // startedAt 是 JSON number（13 位 epoch 毫秒；时间无效时才为 0），不是字符串。
-static String buildBody(const CloudRecord &r, const char *dedupId, uint64_t startedAtMs) {
+// [不必持锁] 只读传入的 cfg 副本与 r，不碰任何共享状态（V2: 配置改为传副本进来，
+//            这样"拼 JSON"这一步可以在锁外做，临界区更短）
+static String buildBody(const CloudConfig &cfg, const CloudRecord &r,
+                        const char *dedupId, uint64_t startedAtMs) {
   String b;
   b.reserve(600);
-  b += "{\"token\":\"";                  b += jsonEsc(s_cfg.token.c_str());      b += "\",";
-  b += "\"deviceId\":\"";                b += jsonEsc(s_cfg.deviceId.c_str());   b += "\",";
-  b += "\"fabricName\":\"";              b += jsonEsc(s_cfg.fabricName.c_str()); b += "\",";
+  b += "{\"token\":\"";                  b += jsonEsc(cfg.token.c_str());      b += "\",";
+  b += "\"deviceId\":\"";                b += jsonEsc(cfg.deviceId.c_str());   b += "\",";
+  b += "\"fabricName\":\"";              b += jsonEsc(cfg.fabricName.c_str()); b += "\",";
   b += "\"operator\":\"";                b += jsonEsc(r.op);                     b += "\",";
   b += "\"softness\":";                  b += String(sane01(r.softness), 3);     b += ",";
   b += "\"smoothness\":";                b += String(sane01(r.smoothness), 3);   b += ",";
@@ -269,17 +318,27 @@ static String parseJsonStr(const String &s, const char *key) {
 
 // ============================================================
 //  状态通知（串口 + 可选网页广播）
+//  ------------------------------------------------------------
+//  ⚠ 本函数可能被 cloudTask(core 0) 调用：
+//    · 锁内只"取回调指针副本"，解锁后再调用回调 —— 避免回调里再访问共享状态造成死锁；
+//    · 回调约定为"只投递 FreeRTOS 队列"（main.cpp 里就是这么注册的），
+//      所以这里不会出现"云任务直接操作 WebSocketsServer"的跨线程问题。
 // ============================================================
 static void notify(const char *ev, const String &detail) {
   Serial.printf("[CLOUD] %s: %s\n", ev, detail.c_str());
-  if (!s_notify) return;
+
+  cloudLock();
+  CloudNotifyCallback cb = s_notify;      // 锁内取副本
+  cloudUnlock();
+  if (!cb) return;
+
   String d = detail;
   d.replace(',', ' ');
   d.replace('\n', ' ');
   d.replace('\r', ' ');
   if (d.length() > 120) d = d.substring(0, 120);
   String m = String("CLOUD,") + ev + "," + d;
-  s_notify(m.c_str());
+  cb(m.c_str());                          // 锁外调用（回调内部只做 xQueueSend，非阻塞）
 }
 
 // ============================================================
@@ -293,11 +352,11 @@ struct HttpOutcome {
   String   err;       // 失败原因
 };
 
-static HttpOutcome doHttpPost(const String &body) {
+static HttpOutcome doHttpPost(const CloudConfig &cfg, const String &body) {
   HttpOutcome o;
   o.ok = false; o.httpCode = 0; o.costMs = 0; o.resp = ""; o.err = "";
 
-  if (s_cfg.url.length() == 0) { o.err = "URL 为空"; return o; }
+  if (cfg.url.length() == 0) { o.err = "URL 为空"; return o; }
 
   WiFiClientSecure client;
   // ⚠ MVP：setInsecure() 不校验服务器证书（方便先跑通）。
@@ -311,7 +370,7 @@ static HttpOutcome doHttpPost(const String &body) {
   http.setTimeout(CLOUD_RESPONSE_TIMEOUT_MS);                  // 单位: 毫秒
   http.setReuse(false);
 
-  if (!http.begin(client, s_cfg.url)) { o.err = "http.begin 失败(URL 无效?)"; return o; }
+  if (!http.begin(client, cfg.url)) { o.err = "http.begin 失败(URL 无效?)"; return o; }
   http.addHeader("Content-Type", "application/json");
 
   uint32_t t0 = millis();
@@ -351,39 +410,70 @@ static uint32_t backoffFor(uint32_t fails) {
 }
 
 // 尝试上传队首一条：成功则出队，失败则安排退避
+// ------------------------------------------------------------
+// 并发要点（V2）：本函数由 cloudTask(core 0) 调用。
+//   ① 锁内：取"队首 JSON 副本 + 配置副本 + 计数"→ 立刻解锁；
+//   ② 锁外：做有界阻塞的 HTTPS POST（此时主 loop 可以自由入队/改配置，不会卡）；
+//   ③ 锁内：回写状态机 + 成功才 queuePop；
+//   ④ 锁外：notify（回调只投递 FreeRTOS 队列）。
+// ============================================================
 static void attemptUpload() {
-  String body;
-  if (!queuePeek(body)) return;
+  // ---- ① 锁内快照（无网络、无 SNTP 等待）----
+  String      body;
+  CloudConfig cfg;
+  String      dedupId;
+  int         pendingBefore = 0;
+  uint32_t    failsBefore   = 0;
+  cloudLock();
+  if (!queuePeek(body)) { cloudUnlock(); return; }
+  cfg           = s_cfg;
+  dedupId       = parseJsonStr(body, "dedupId");
+  pendingBefore = (int)s_count;
+  failsBefore   = s_failCount;
+  cloudUnlock();
 
-  String dedupId = parseJsonStr(body, "dedupId");
-  notify("SEND", String("第") + (unsigned int)(s_failCount + 1) + "次尝试 " +
+  notify("SEND", String("第") + (unsigned int)(failsBefore + 1) + "次尝试 " +
                  (dedupId.length() ? dedupId : String("(无 dedupId)")) +
-                 " pending=" + (int)s_count);
+                 " pending=" + pendingBefore);
 
-  HttpOutcome r = doHttpPost(body);
+  // ---- ② 锁外：HTTPS（连接 ≤6s / TLS ≤8s / 响应 ≤6s）；期间不持锁 ----
+  HttpOutcome r = doHttpPost(cfg, body);
   if (r.resp.length() > 0) {
     Serial.printf("[CLOUD] 云端响应(HTTP %d): %s\n", r.httpCode, brief(r.resp, 200).c_str());
   }
 
+  // ---- ③ 锁内：回写状态 + 出队 ----
+  String   okId;
+  int      pendingAfter = 0;
+  uint32_t waitMs       = 0;
+  cloudLock();
   if (r.ok) {
-    String id = parseJsonStr(r.resp, "_id");
-    s_failCount = 0;
+    okId         = parseJsonStr(r.resp, "_id");
+    s_failCount  = 0;
     s_lastResult = String("OK HTTP ") + r.httpCode +
-                   (id.length() ? (" _id=" + id) : String("")) +
+                   (okId.length() ? (" _id=" + okId) : String("")) +
                    " " + (unsigned long)r.costMs + "ms";
     queuePop();                                                // 只有成功才出队
+    pendingAfter = (int)s_count;
     s_nextAttemptMs = millis() + CLOUD_SUCCESS_NEXT_DELAY_MS;   // 还有积压则稍后继续
-    notify("OK", String("HTTP ") + r.httpCode +
-                 (id.length() ? (" _id=" + id) : String("")) +
-                 " 耗时" + (unsigned long)r.costMs + "ms pending=" + (int)s_count);
   } else {
     s_failCount++;
-    uint32_t waitMs = backoffFor(s_failCount);
+    waitMs          = backoffFor(s_failCount);
     s_nextAttemptMs = millis() + waitMs;
-    s_lastResult = String("FAIL ") + r.err + " HTTP " + r.httpCode;
+    s_lastResult    = String("FAIL ") + r.err + " HTTP " + r.httpCode;
+    pendingAfter    = (int)s_count;
+  }
+  cloudUnlock();
+
+  // ---- ④ 锁外：通知（串口 + 投递到"网页广播队列"）----
+  if (r.ok) {
+    notify("OK", String("HTTP ") + r.httpCode +
+                 (okId.length() ? (" _id=" + okId) : String("")) +
+                 " 耗时" + (unsigned long)r.costMs + "ms pending=" + pendingAfter);
+  } else {
     notify("FAIL", String("HTTP ") + r.httpCode + " " + r.err +
                    " 耗时" + (unsigned long)r.costMs + "ms; " +
-                   (unsigned long)(waitMs / 1000) + "s 后重试 pending=" + (int)s_count);
+                   (unsigned long)(waitMs / 1000) + "s 后重试 pending=" + pendingAfter);
   }
 }
 
@@ -392,9 +482,12 @@ static void attemptUpload() {
 // ============================================================
 
 void cloudUploadInit() {
-  nvsBegin();
+  // ---- 0) 先建互斥量（必须在 cloudTask 启动之前；main.cpp 里先 Init 再建任务）----
+  cloudMutexEnsure();
 
-  // ---- 1) 读配置（NVS 优先；缺省用编译期默认值并写回 NVS）----
+  // ---- 1)+2) 读配置 / 恢复队列：锁内完成（此时虽无并发，但保持与运行期一致的访问约定）----
+  cloudLock();
+  nvsBegin();
   s_cfg.url        = s_prefs.getString("url",    CLOUD_UPLOAD_URL);
   s_cfg.token      = s_prefs.getString("token",  CLOUD_TOKEN);
   s_cfg.deviceId   = s_prefs.getString("devid",  DEVICE_ID);
@@ -440,12 +533,15 @@ void cloudUploadInit() {
     s_head  = head;
     s_count = cnt;
   }
+  cloudUnlock();   // ← 队列恢复完毕，先解锁：下面 SNTP/打印都不需要持锁
 
   // ---- 3) SNTP（非阻塞；联网后自动同步，用于 startedAt 绝对时间）----
   // 只负责"发起"同步：configTime() 不在本地阻塞，同步由系统后台每秒重试。
-  cloudUploadSntpSync();
+  cloudUploadSntpSync();   // ⚠ 本函数内部自己加锁，故必须在锁外调用
 
   // ---- 4) 打印配置摘要（token 脱敏）----
+  // 打印要读 s_cfg/s_count：重新加锁，打印完立刻解锁（纯串口输出，非网络阻塞）
+  cloudLock();
   Serial.println("[CLOUD] ===== 设备上云(HTTPS) 初始化 =====");
   Serial.printf("[CLOUD] URL      : %s\n", s_cfg.url.c_str());
   Serial.printf("[CLOUD] deviceId : %s | fabricName: %s | operator默认: %s\n",
@@ -477,7 +573,12 @@ void cloudUploadInit() {
     s_state = CLOUD_ST_IDLE;
     s_nextAttemptMs = millis();
   }
-  notify("CFG", String("pending=") + (int)s_count + " deviceId=" + s_cfg.deviceId);
+  // 供下面 notify 使用（锁外不再读共享状态）
+  int    pendingNow = (int)s_count;
+  String cfgDevId   = s_cfg.deviceId;
+  cloudUnlock();
+
+  notify("CFG", String("pending=") + pendingNow + " deviceId=" + cfgDevId);
 }
 
 // 入队前的"时间兜底"：SNTP 没同步就再发起一次同步，并短等一小会儿（有界，最长
@@ -485,7 +586,11 @@ void cloudUploadInit() {
 static void kickTimeSyncIfNeeded();
 
 bool cloudUploadEnqueue(const CloudRecord &rec) {
-  nvsBegin();
+  // 由主 loop(core 1) 调用。并发要点：
+  //   · 配置/队列/seq 的读写都在锁内；
+  //   · kickTimeSyncIfNeeded() 最长会等 1.5s，**必须在锁外**（否则云任务会被一起卡住）；
+  //   · 组包(buildBody)用锁内取出的配置副本，可在锁外做。
+  CloudConfig cfg = cloudCfgSnapshot();   // 锁内：NVS 就绪 + 配置副本
 
   CloudRecord r = rec;
 
@@ -494,25 +599,32 @@ bool cloudUploadEnqueue(const CloudRecord &rec) {
     strncpy(r.op, CLOUD_DEFAULT_OPERATOR, sizeof(r.op) - 1);
     r.op[sizeof(r.op) - 1] = '\0';
   }
-  // dedupId：缺省则生成唯一值
+  // dedupId：缺省则生成唯一值（要写 NVS 里的 seq → 锁内）
   char did[64];
   if (r.dedupId[0] == '\0') {
-    makeDedupId(did, sizeof(did));
+    cloudLock();
+    makeDedupId(cfg, did, sizeof(did));
+    cloudUnlock();
   } else {
     strncpy(did, r.dedupId, sizeof(did) - 1);
     did[sizeof(did) - 1] = '\0';
   }
   // ---- startedAt（= 实验开始时刻的 epoch 毫秒）----
   // 时间无效时先尝试触发/短等一次 SNTP 同步，避免把 0 或错误数字发上云
-  kickTimeSyncIfNeeded();
+  kickTimeSyncIfNeeded();                 // ⚠ 锁外调用（内部自己加锁；最长等 1.5s）
   uint64_t startedAt = 0;
-  bool     timeOk    = cloudUploadResolveStartedAt(r, startedAt);
+  bool     timeOk    = cloudUploadResolveStartedAt(r, startedAt);   // 内部自己加锁
 
-  String body = buildBody(r, did, startedAt);
+  // 组包（锁外：只用 cfg 副本；g_metrics/g_score 也是在这一刻由主 loop 快照进 JSON，
+  //       云任务读到的永远是"打包好的一份完整记录"，不会读到半更新的状态）
+  String body = buildBody(cfg, r, did, startedAt);
+
+  // ---- 入队（锁内：改 RAM 环形队列 + 写 NVS + 调状态机）----
+  cloudLock();
   bool wasEmpty = (s_count == 0);
   queuePush(body);
-
   s_lastResult = String("已入队 ") + did;
+  int pendingNow = (int)s_count;
   if (wasEmpty) {
     // 队列由空变非空 → 唤醒状态机并立刻尝试；退避计数清零
     s_state = CLOUD_ST_WAIT;
@@ -520,10 +632,11 @@ bool cloudUploadEnqueue(const CloudRecord &rec) {
     s_nextAttemptMs = millis();
   }
   // 队列本来就有积压时不打断既有的退避节奏（避免失败风暴）
+  cloudUnlock();
 
   char tbuf[32];
   snprintf(tbuf, sizeof(tbuf), "%llu", (unsigned long long)startedAt);
-  notify("ENQ", String("pending=") + (int)s_count +
+  notify("ENQ", String("pending=") + pendingNow +
                 " " + did +
                 " composite=" + String(sane100(r.composite), 1) +
                 " startedAt=" + tbuf +
@@ -536,6 +649,8 @@ bool cloudUploadEnqueue(const CloudRecord &rec) {
 }
 
 bool cloudUploadEnqueueCurrent(const char *op) {
+  // ⚠ 本函数由主 loop(core 1) 调用：就在这里把 g_metrics / g_score "快照"成一条记录，
+  //   之后 JSON 立即冻结（重传用的是同一份字节），云任务永远读不到半更新的状态。
   CloudRecord r = {};
   r.softness     = sane01(g_metrics.softness);
   r.smoothness   = sane01(g_metrics.smoothness);
@@ -557,37 +672,58 @@ bool cloudUploadEnqueueCurrent(const char *op) {
   return cloudUploadEnqueue(r);
 }
 
+// 推进上传状态机（由 cloudTask(core 0) 周期调用；主 loop 不再调用 → 不再阻塞主循环）
+// 并发要点：只在"读状态/判定到期"与"回写状态"时短暂持锁；
+//           attemptUpload() 内部的 HTTPS 是锁外执行的（见该函数注释）。
 void cloudUploadLoop() {
   uint32_t now = millis();
 
-  // 队列空：空闲
-  if (s_count == 0) {
+  // ---- 锁内：判定这一轮要不要发（读 s_count / s_state / s_nextAttemptMs）----
+  bool     due      = false;
+  bool     sending  = false;
+  cloudLock();
+  if (s_count == 0) {                      // 队列空：空闲
     s_state = CLOUD_ST_IDLE;
     s_failCount = 0;
     s_offlineLogged = false;
+    cloudUnlock();
     return;
   }
   if (s_state == CLOUD_ST_IDLE) {          // 有新数据但状态还在空闲 → 唤醒
     s_state = CLOUD_ST_WAIT;
     s_nextAttemptMs = now;
   }
-  if (s_state != CLOUD_ST_WAIT) return;    // 发送中不会被重入
-  if (!timeReached(now, s_nextAttemptMs)) return;
+  if (s_state == CLOUD_ST_SENDING) sending = true;              // 发送中不会被重入
+  else if (s_state == CLOUD_ST_WAIT) due = timeReached(now, s_nextAttemptMs);
+  cloudUnlock();
+  if (sending || !due) return;
 
-  // 没网：只等，不消耗退避档位（联网后自动补传）
+  // ---- 没网：只等，不消耗退避档位（联网后自动补传）----
   if (!cloudUploadIsOnline()) {
-    s_nextAttemptMs = now + CLOUD_OFFLINE_POLL_MS;
+    bool     logIt   = false;
+    int      pending = 0;
+    cloudLock();
+    s_nextAttemptMs = millis() + CLOUD_OFFLINE_POLL_MS;
     if (!s_offlineLogged) {
       s_offlineLogged = true;
-      notify("OFF", String("离线(等联网) pending=") + (int)s_count);
+      logIt = true;
+      pending = (int)s_count;
     }
+    cloudUnlock();
+    if (logIt) notify("OFF", String("离线(等联网) pending=") + pending);
     return;
   }
-  s_offlineLogged = false;
 
+  cloudLock();
+  s_offlineLogged = false;
   s_state = CLOUD_ST_SENDING;
-  attemptUpload();                         // 有界阻塞：连接/发送各 ≤ 6s，且每轮最多一条
+  cloudUnlock();
+
+  attemptUpload();                         // 锁外有界阻塞：连接/发送各 ≤ 6s，且每轮最多一条
+
+  cloudLock();
   s_state = CLOUD_ST_WAIT;
+  cloudUnlock();
 }
 
 void cloudUploadTestNow() {
@@ -596,16 +732,33 @@ void cloudUploadTestNow() {
 }
 
 bool cloudUploadIsOnline() {
-  return WiFi.status() == WL_CONNECTED;
+  return WiFi.status() == WL_CONNECTED;    // 只读 WiFi 驱动状态，无需加锁
 }
 
-int cloudUploadPendingCount() { return (int)s_count; }
-int cloudUploadDroppedCount() { return (int)s_dropped; }
+// 计数/结果查询：可能被"云任务写、主 loop 读"同时访问 → 锁内取值
+int cloudUploadPendingCount() {
+  cloudLock(); int n = (int)s_count; cloudUnlock(); return n;
+}
+int cloudUploadDroppedCount() {
+  cloudLock(); int n = (int)s_dropped; cloudUnlock(); return n;
+}
 
-const char *cloudUploadLastResult() { return s_lastResult.c_str(); }
+// 最近一次上传结果：锁内拷贝到静态缓冲后返回，避免把"可能被另一线程改写的 String"暴露出去
+// （仅用于串口/网页展示，非重入安全；本工程只在单点调用）
+const char *cloudUploadLastResult() {
+  static char buf[96];
+  cloudLock();
+  strncpy(buf, s_lastResult.c_str(), sizeof(buf) - 1);
+  buf[sizeof(buf) - 1] = '\0';
+  cloudUnlock();
+  return buf;
+}
 
 void cloudUploadSetConfig(const String &url, const String &token,
                           const String &deviceId, const String &fabricName) {
+  // 由 HTTP /cloud/config（主 loop）调用；云任务可能正在读 s_cfg → 整个"改内存 + 写 NVS"放锁内。
+  // 临界区只碰 RAM/NVS（毫秒级），不含任何网络操作，所以不会拖慢网页响应或云任务。
+  cloudLock();
   nvsBegin();
 
   s_cfg.url        = url;
@@ -626,11 +779,22 @@ void cloudUploadSetConfig(const String &url, const String &token,
   Serial.printf("[CLOUD] 配置已保存到 NVS: url=%s deviceId=%s fabricName=%s token=%s\n",
                 s_cfg.url.c_str(), s_cfg.deviceId.c_str(),
                 s_cfg.fabricName.c_str(), maskToken(s_cfg.token).c_str());
+  cloudUnlock();
 }
 
-CloudConfig cloudUploadGetConfig() { return s_cfg; }
+// 返回配置"副本"（锁内拷贝）→ 调用方拿到的是快照，之后 s_cfg 再变也不影响它
+CloudConfig cloudUploadGetConfig() {
+  cloudLock();
+  CloudConfig c = s_cfg;
+  cloudUnlock();
+  return c;
+}
 
-void cloudUploadSetNotifyCallback(CloudNotifyCallback cb) { s_notify = cb; }
+void cloudUploadSetNotifyCallback(CloudNotifyCallback cb) {
+  cloudLock();
+  s_notify = cb;
+  cloudUnlock();
+}
 
 // ============================================================
 //  时间（SNTP）与"实验开始时刻"
@@ -639,24 +803,35 @@ void cloudUploadSetNotifyCallback(CloudNotifyCallback cb) { s_notify = cb; }
 void cloudUploadSntpSync() {
   uint32_t now = millis();
   // 限流：短时间内不重复 configTime()（首次 s_sntpLastReqMs==0 时必然放行）
-  if (s_sntpLastReqMs != 0 && (uint32_t)(now - s_sntpLastReqMs) < CLOUD_SNTP_RETRIGGER_MS) return;
+  // "判断 + 更新"必须原子（主 loop 也会调本函数）→ 放锁内；configTime() 放锁外
+  cloudLock();
+  if (s_sntpLastReqMs != 0 && (uint32_t)(now - s_sntpLastReqMs) < CLOUD_SNTP_RETRIGGER_MS) {
+    cloudUnlock();
+    return;
+  }
   s_sntpLastReqMs = now;
+  cloudUnlock();
   // configTime() 只是"发起/重启"SNTP 客户端，不阻塞；同步由系统后台任务完成
   configTime(0, 0, "ntp.aliyun.com", "ntp.ntsc.ac.cn", "pool.ntp.org");
 }
 
-bool cloudUploadTimeSynced() { return nowEpochMs() != 0; }
+bool cloudUploadTimeSynced() { return nowEpochMs() != 0; }   // 只读系统时间，无需加锁
 
-uint64_t cloudUploadNowMs() { return nowEpochMs(); }
+uint64_t cloudUploadNowMs() { return nowEpochMs(); }         // 只读系统时间，无需加锁
 
 void cloudUploadNoteRunningEdge() {
-  s_expHasStart    = true;
-  s_expStartMillis = millis();
-  s_expStartEpochMs = nowEpochMs();      // 记录瞬间就已同步的话，直接给出绝对时间
+  // 主 loop 在进入 STATE_RUNNING 的状态沿调用；云任务/入队路径会读这三个字段 → 锁内写
+  uint32_t m = millis();
+  uint64_t ep = nowEpochMs();            // 记录瞬间就已同步的话，直接给出绝对时间
+  cloudLock();
+  s_expHasStart     = true;
+  s_expStartMillis  = m;
+  s_expStartEpochMs = ep;
+  cloudUnlock();
   Serial.printf("[CLOUD] 记录实验开始时刻: millis=%lu  epochMs=%llu%s\n",
-                (unsigned long)s_expStartMillis,
-                (unsigned long long)s_expStartEpochMs,
-                s_expStartEpochMs ? "" : " (SNTP 未同步，稍后同步成功会自动回算)");
+                (unsigned long)m,
+                (unsigned long long)ep,
+                ep ? "" : " (SNTP 未同步，稍后同步成功会自动回算)");
 }
 
 bool cloudUploadResolveStartedAt(const CloudRecord &rec, uint64_t &outMs) {
@@ -666,13 +841,24 @@ bool cloudUploadResolveStartedAt(const CloudRecord &rec, uint64_t &outMs) {
     return true;
   }
 
+  // 锁内取"实验开始时刻"的副本：本函数可能在主 loop（入队）里被调用，
+  // 而 cloudUploadNoteRunningEdge() 也在主 loop，但为保持一致约定仍走锁，且打印放锁外。
+  bool     hasStart = false;
+  uint32_t startMs  = 0;
+  uint64_t startEp  = 0;
+  cloudLock();
+  hasStart = s_expHasStart;
+  startMs  = s_expStartMillis;
+  startEp  = s_expStartEpochMs;
+  cloudUnlock();
+
   uint64_t nowEp = nowEpochMs();
 
   // 2) 有"实验开始时刻"记录 → 用单调时钟回算实验开始那一刻的绝对时间
   //    （即使入队时才同步好，也能算出正确的开始时刻：now - 已经过的时长。
   //      elapsed 超过 1 天说明该记录已过期，不用它，避免报出严重偏早的时间）
-  if (s_expHasStart && nowEp != 0) {
-    uint32_t elapsed = millis() - s_expStartMillis;         // millis() 环绕安全
+  if (hasStart && nowEp != 0) {
+    uint32_t elapsed = millis() - startMs;                  // millis() 环绕安全
     if (elapsed < 86400000UL) {
       outMs = nowEp - (uint64_t)elapsed;                    // nowEp ≥ 1.6e12 ≫ elapsed
       if (outMs > CLOUD_EPOCH_MS_MIN) {
@@ -686,8 +872,8 @@ bool cloudUploadResolveStartedAt(const CloudRecord &rec, uint64_t &outMs) {
   }
   // 2b) 记录实验开始时刻时就已经同步 → 直接用它（此分支实际由上面的 elapsed 回算覆盖，
   //     这里兜住 elapsed 异常/回绕的边角情况）
-  if (s_expHasStart && s_expStartEpochMs > CLOUD_EPOCH_MS_MIN) {
-    outMs = s_expStartEpochMs;
+  if (hasStart && startEp > CLOUD_EPOCH_MS_MIN) {
+    outMs = startEp;
     return true;
   }
 
@@ -706,24 +892,31 @@ bool cloudUploadResolveStartedAt(const CloudRecord &rec, uint64_t &outMs) {
 }
 
 // SNTP 未同步时：重新发起同步 + 短等（有界），尽量让本条记录带上真实时间
+// ⚠ 调用方必须处于"未持锁"状态（内部会调 cloudUploadSntpSync()，且这里要 delay 等待）
 static void kickTimeSyncIfNeeded() {
   uint64_t ep = nowEpochMs();
   if (ep != 0) {
-    if (!s_sntpSyncLogged) {
-      s_sntpSyncLogged = true;
-      Serial.printf("[CLOUD] SNTP 同步成功：now=%llu ms\n", (unsigned long long)ep);
-    }
+    cloudLock();
+    bool first = !s_sntpSyncLogged;
+    if (first) s_sntpSyncLogged = true;
+    cloudUnlock();
+    if (first) Serial.printf("[CLOUD] SNTP 同步成功：now=%llu ms\n", (unsigned long long)ep);
     return;
   }
   cloudUploadSntpSync();                                // 触发/重启同步（内部限流）
   uint32_t t0 = millis();
   while ((uint32_t)(millis() - t0) < (uint32_t)CLOUD_TIME_SYNC_WAIT_MS) {
-    delay(50);
+    delay(50);                                          // 仅主 loop 的入队路径会走到这里，最长 1.5s
     ep = nowEpochMs();
     if (ep != 0) {                                      // 等到了 → 正常值
-      s_sntpSyncLogged = true;
-      Serial.printf("[CLOUD] SNTP 同步成功(等待 %lu ms)：now=%llu ms\n",
-                    (unsigned long)(millis() - t0), (unsigned long long)ep);
+      cloudLock();
+      bool first = !s_sntpSyncLogged;
+      if (first) s_sntpSyncLogged = true;
+      cloudUnlock();
+      if (first) {
+        Serial.printf("[CLOUD] SNTP 同步成功(等待 %lu ms)：now=%llu ms\n",
+                      (unsigned long)(millis() - t0), (unsigned long long)ep);
+      }
       return;
     }
   }
