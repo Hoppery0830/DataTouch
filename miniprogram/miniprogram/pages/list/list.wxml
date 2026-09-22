@@ -1,0 +1,158 @@
+<!--pages/list/list.wxml  M2 实验记录列表（搜索 / 排序 / 筛选 + 分页）-->
+<view class="page">
+  <!-- 顶部说明条：明确数据来源，便于联调确认 -->
+  <view class="head">
+    <view class="head-title">实验记录</view>
+    <view class="head-sub">
+      集合 experiments
+      <text wx:if="{{envId}}"> · {{envId}}</text>
+    </view>
+  </view>
+
+  <!-- 远程控制入口（M3 追加）：进入控制页下发 ARM/START/STOP/RESET -->
+  <view class="ctrl-entry" bindtap="onTapControl">
+    <view class="ctrl-left">
+      <view class="ctrl-title">远程控制</view>
+      <view class="ctrl-sub">下发 ARM / START / STOP / RESET 并查看执行状态</view>
+    </view>
+    <view class="ctrl-arrow">›</view>
+  </view>
+
+  <!-- 搜索框：按布料名模糊匹配（输入停止 300ms 后才查询） -->
+  <view class="search">
+    <input
+      class="search-input"
+      type="text"
+      value="{{keyword}}"
+      placeholder="搜索布料名（模糊匹配）"
+      placeholder-class="search-ph"
+      confirm-type="search"
+      bindinput="onKeywordInput"
+      bindconfirm="onKeywordConfirm"
+    />
+    <view class="search-clear" wx:if="{{keyword}}" bindtap="onClearKeyword">✕</view>
+  </view>
+
+  <!-- 排序 + 筛选区（吸顶，滚动时始终可用） -->
+  <view class="toolbar">
+    <!-- 排序：两档切换 -->
+    <view class="bar-row">
+      <text class="bar-label">排序</text>
+      <view class="chips">
+        <view
+          class="chip {{s.value === sortValue ? 'chip-on' : ''}}"
+          wx:for="{{sortOptions}}"
+          wx:for-item="s"
+          wx:key="value"
+          data-value="{{s.value}}"
+          bindtap="onSortChange"
+        >{{s.label}}↓</view>
+      </view>
+    </view>
+
+    <!-- 筛选：按数据来源 -->
+    <view class="bar-row">
+      <text class="bar-label">来源</text>
+      <view class="chips">
+        <view
+          class="chip {{s.value === sourceValue ? 'chip-on' : ''}}"
+          wx:for="{{sourceChips}}"
+          wx:for-item="s"
+          wx:key="value"
+          data-type="source"
+          data-value="{{s.value}}"
+          bindtap="onFilterTap"
+        >{{s.label}}</view>
+      </view>
+    </view>
+
+    <!-- 筛选：按设备（选项来自已加载数据，最多 8 个） -->
+    <view class="bar-row" wx:if="{{deviceChips.length > 1}}">
+      <text class="bar-label">设备</text>
+      <scroll-view class="chips-scroll" scroll-x enable-flex>
+        <view class="chips">
+          <view
+            class="chip {{s.value === deviceValue ? 'chip-on' : ''}}"
+            wx:for="{{deviceChips}}"
+            wx:for-item="s"
+            wx:key="value"
+            data-type="device"
+            data-value="{{s.value}}"
+            bindtap="onFilterTap"
+          >{{s.label}}</view>
+        </view>
+      </scroll-view>
+    </view>
+  </view>
+
+  <!-- 当前条件与结果条数 -->
+  <view class="summary" wx:if="{{inited && !errMsg}}">
+    <text class="summary-count">{{totalText}}</text>
+    <text class="summary-filter" wx:if="{{activeFilter}}">{{summaryText}}</text>
+    <view class="summary-reset" wx:if="{{activeFilter}}" bindtap="onResetFilters">重置</view>
+  </view>
+
+  <!-- 排序被降级为内存排序时的提醒（一般不会出现） -->
+  <view class="hint" wx:if="{{sortedHint}}">{{sortedHint}}</view>
+
+  <!-- 错误提示（集合不存在 / 无权限 / 环境不对时给出可操作指引） -->
+  <view class="err" wx:if="{{errMsg}}">
+    <view class="err-text">{{errMsg}}</view>
+    <view class="err-btn" bindtap="onRetry">重试</view>
+  </view>
+
+  <!-- 加载中（首屏 / 条件变化后重新查询） -->
+  <view class="state" wx:if="{{loading && !list.length}}">
+    <view class="state-title">加载中…</view>
+    <view class="state-tip">正在读取 experiments 集合</view>
+  </view>
+
+  <!-- 记录列表 -->
+  <view class="card" wx:for="{{list}}" wx:key="_id" data-id="{{item._id}}" bindtap="onTapItem">
+    <view class="card-top">
+      <view class="fabric">{{item.fabricName}}</view>
+      <view class="score">
+        <text class="score-num score-{{item.scoreLevel}}">{{item.composite}}</text>
+        <text class="score-unit">分</text>
+      </view>
+    </view>
+
+    <!-- 四维小字：柔软 / 顺滑 / 细腻 / 回弹（细腻度 = 100 - roughness×100） -->
+    <view class="metrics">
+      <view class="metric" wx:for="{{item.metrics}}" wx:for-item="m" wx:key="key">
+        <text class="metric-label">{{m.label}}</text>
+        <text class="metric-value">{{m.value}}</text>
+      </view>
+    </view>
+
+    <view class="card-bottom">
+      <view class="tags">
+        <text class="tag tag-source" wx:if="{{item.sourceLabel}}">{{item.sourceLabel}}</text>
+        <text class="tag tag-device" wx:if="{{item.deviceId}}">{{item.deviceId}}</text>
+      </view>
+      <text class="time">{{item.createdAtText}}</text>
+    </view>
+  </view>
+
+  <!-- 空态：区分「一条都没有」与「筛选后无结果」 -->
+  <view class="empty" wx:if="{{inited && !loading && !list.length && !errMsg}}">
+    <block wx:if="{{activeFilter}}">
+      <view class="empty-title">没有匹配的实验记录</view>
+      <view class="empty-tip">当前条件：{{summaryText}}</view>
+      <view class="empty-tip">换个关键词，或点「重置」查看全部记录</view>
+      <view class="empty-btn" bindtap="onResetFilters">清空筛选条件</view>
+    </block>
+    <block wx:else>
+      <view class="empty-title">还没有实验记录</view>
+      <view class="empty-tip">设备上传（云函数 deviceUpload）或在云开发控制台手动插入一条即可看到</view>
+      <view class="empty-btn" bindtap="onRetry">重新加载</view>
+    </block>
+  </view>
+
+  <!-- 底部状态 / 到底提示 -->
+  <view class="foot" wx:if="{{list.length}}">
+    <text wx:if="{{loading}}">加载中…</text>
+    <text wx:elif="{{hasMore}}">上拉加载更多</text>
+    <text wx:else>没有更多了</text>
+  </view>
+</view>

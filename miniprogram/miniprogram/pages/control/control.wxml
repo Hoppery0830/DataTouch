@@ -1,0 +1,150 @@
+<!--pages/control/control.wxml  远程控制（选择运动模式 + 下发 4 个安全命令 + 查看最近命令状态）-->
+<view class="page">
+  <!-- 顶部说明条：明确当前操作对象、云环境，以及当前选中的运动模式 -->
+  <view class="head">
+    <view class="head-title">远程控制</view>
+    <view class="head-sub">
+      集合 commands
+      <text wx:if="{{envId}}"> · {{envId}}</text>
+    </view>
+    <!-- 当前模式：由最近一条 mode_* 命令推导（"未知" = 还没选过 / 最近一次已过期） -->
+    <view class="head-mode">
+      当前模式：<text class="head-mode-val {{currentModeCmd ? '' : 'head-mode-unknown'}}">{{currentModeText}}</text>
+      <text class="head-mode-hint">（选模式 → ARM → 等准备完成 → START）</text>
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="field-label">STM32：{{motorStateText}}</view>
+    <view>动作阶段：{{motorStageText}}</view>
+    <view wx:if="{{faultText}}">{{faultText}}</view>
+    <view class="field-tip">状态更新于 {{statusTimeText || '尚无回传'}}；云端状态有网络延迟</view>
+  </view>
+  <!-- ============ 设备选择 ============ -->
+  <view class="card">
+    <view class="field-label">设备号</view>
+    <input
+      class="field-input"
+      type="text"
+      value="{{deviceId}}"
+      placeholder="{{devicePlaceholder}}"
+      placeholder-class="field-ph"
+      confirm-type="done"
+      bindinput="onDeviceInput"
+      bindconfirm="onDeviceConfirm"
+    />
+    <view class="field-tip">手填设备号后按「完成」生效，会自动记住上次填写的值</view>
+  </view>
+
+  <!-- ============ 命令按钮 ============ -->
+  <view class="card">
+    <view class="field-label">下发命令</view>
+    <view class="cmd-grid">
+      <view
+        class="cmd-btn cmd-{{item.cls}} {{sendingCmd === item.cmd ? 'cmd-busy' : ''}}"
+        wx:for="{{cmds}}"
+        wx:key="cmd"
+        data-cmd="{{item.cmd}}"
+        bindtap="onSendCommand"
+      >
+        <view class="cmd-name">{{item.label}}</view>
+        <view class="cmd-desc">{{item.desc}}</view>
+      </view>
+    </view>
+    <view class="field-tip">
+      点击后写入 commands（state=待发送），设备轮询取走后变为「已下发」，STM32 接受后显示「已接受」，真正结束才显示「已完成」，失败单独显示；
+      60 秒内没被取走会自动置为「已过期」。
+    </view>
+  </view>
+
+  <!-- ============ 运动模式（新增：只选模式，不启动；START 才执行） ============ -->
+  <view class="card">
+    <view class="field-label">运动模式</view>
+
+    <!-- 3 个模式卡片：选中项整体高亮并在右侧标「当前 ✓」（选中态由最近一条 mode_* 命令推导） -->
+    <view class="mode-list">
+      <view
+        class="mode-item mode-{{item.cls}} {{currentModeCmd === item.cmd ? 'mode-on' : ''}}"
+        wx:for="{{modes}}"
+        wx:key="cmd"
+        data-cmd="{{item.cmd}}"
+        bindtap="onModeTap"
+      >
+        <view class="mode-main">
+          <view class="mode-name">{{item.name}}<text class="mode-en">{{item.en}}</text></view>
+          <view class="mode-act">{{item.act}}</view>
+        </view>
+        <view class="mode-tail">
+          <text class="mode-check" wx:if="{{currentModeCmd === item.cmd}}">当前 ✓</text>
+          <text class="mode-send" wx:elif="{{sendingCmd === item.cmd}}">发送中…</text>
+        </view>
+      </view>
+    </view>
+
+    <!-- 当前模式推导结果（来自"最近命令"里最近一条 mode_*，无需额外云函数） -->
+    <view class="mode-current">{{modeHintText}}</view>
+
+    <!-- 三种模式含义 + 用法说明 -->
+    <view class="mode-note">
+      <view class="mode-note-title">模式说明</view>
+      <view class="mode-note-line" wx:for="{{modeNoteRows}}" wx:key="name">· {{item.name}}：{{item.desc}}</view>
+      <view class="mode-note-foot">{{modeNoteFoot}}</view>
+    </view>
+  </view>
+
+  <!-- ============ 最近命令 ============ -->
+  <view class="card">
+    <view class="list-head">
+      <view class="field-label list-title">最近命令（最多 10 条）</view>
+      <view class="refresh" bindtap="onRetry">刷新</view>
+    </view>
+
+    <!-- 错误提示（集合不存在 / 无权限时给出可操作指引） -->
+    <view class="err" wx:if="{{errMsg}}">
+      <view class="err-text">{{errMsg}}</view>
+      <view class="err-btn" bindtap="onRetry">重试</view>
+    </view>
+
+    <!-- 加载中（首屏） -->
+    <view class="state" wx:if="{{loading && !list.length}}">
+      <view class="state-title">加载中…</view>
+      <view class="state-tip">正在读取 commands 集合</view>
+    </view>
+
+    <!-- 命令列表 -->
+    <view class="cmd-item {{item.isMode ? 'cmd-item-mode' : ''}}" wx:for="{{list}}" wx:key="_id">
+      <view class="cmd-item-top">
+        <text class="cmd-item-name">{{item.cmdLabel}}</text>
+        <text class="st {{item.stateClass}}">{{item.stateText}}</text>
+      </view>
+      <view class="cmd-item-mid">
+        <text class="cmd-item-time">{{item.timeText}}</text>
+        <text class="cmd-item-id">#{{item.idText}}</text>
+      </view>
+      <view class="cmd-item-aux">{{item.auxText}}</view>
+    </view>
+
+    <!-- 空态 -->
+    <view class="empty" wx:if="{{inited && !loading && !list.length && !errMsg}}">
+      <view class="empty-title">还没有命令记录</view>
+      <view class="empty-tip">{{hintText}}</view>
+      <view class="empty-tip">请确认设备号填写正确（当前：{{deviceId}}）</view>
+    </view>
+
+    <!-- 底部状态 -->
+    <view class="foot" wx:if="{{list.length}}">
+      <text wx:if="{{loading}}">刷新中…</text>
+      <text wx:else>下拉可刷新 · 更新于 {{serverTimeText}}</text>
+    </view>
+  </view>
+
+  <!-- ============ 醒目安全提示 ============ -->
+  <view class="safety">
+    <view class="safety-title">⚠️ 安全提示</view>
+    <view class="safety-line">· 远程命令有延迟：链路是「小程序 → 云数据库 → 设备轮询」，延迟受轮询与网络影响；短时离线后，未过期的待发送命令仍可能被取走。</view>
+    <view class="safety-line">· 紧急情况（设备异常、有安全风险）请直接使用<text class="safety-strong">设备现场按钮 / 急停</text>或设备自带的本地网页，不要依赖远程命令。</view>
+    <view class="safety-line">· 本页命令白名单：ARM（待命）、START（开始）、STOP（停止）、RESET（复位），以及 3 个模式选择 mode_press / mode_rub / mode_slide；命令 60 秒内有效，过期自动失效。</view>
+    <view class="safety-line">· 模式选择只切换 STM32 的动作模式，<text class="safety-strong">本身不会让设备动</text>；必须 ARM 准备完成后再点 START 才执行。</view>
+    <view class="safety-line">· 命令带设备号隔离，只能操作你填写的这台设备；设备号请勿填错。</view>
+  </view>
+</view>

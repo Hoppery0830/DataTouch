@@ -1,0 +1,8 @@
+{
+  "navigationBarTitleText": "实验记录",
+  "enablePullDownRefresh": true,
+  "backgroundTextStyle": "dark",
+  "backgroundColor": "#F6F6F6",
+  "onReachBottomDistance": 80,
+  "usingComponents": {}
+}

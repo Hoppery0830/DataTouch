@@ -1,0 +1,14 @@
+{
+  "name": "sendCommand",
+  "version": "1.0.0",
+  "description": "远程控制命令下发：校验 cmd 白名单（arm/start/stop/reset）+ 取 openid，写入 commands 集合（state=pending，60s 过期）",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "wx-server-sdk": "~2.4.0"
+  }
+}

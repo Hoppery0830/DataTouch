@@ -1,0 +1,14 @@
+{
+  "name": "deviceCommand",
+  "version": "1.0.0",
+  "description": "设备侧远程控制命令通道（HTTP）：token 校验 + action=poll 取走待执行命令（含过期清理）/ action=ack 确认执行",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "wx-server-sdk": "~2.4.0"
+  }
+}

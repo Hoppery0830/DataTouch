@@ -1,0 +1,174 @@
+/* pages/detail/detail.wxss  M1 实验详情样式 */
+.page {
+  min-height: 100vh;
+  padding: 24rpx 24rpx 56rpx;
+  box-sizing: border-box;
+  background: #f6f6f6;
+}
+
+/* 状态 */
+.state {
+  padding: 80rpx 0;
+  text-align: center;
+  font-size: 26rpx;
+  color: #9aa4b2;
+}
+.err {
+  padding: 24rpx;
+  background: #fff5f5;
+  border: 1rpx solid #ffd9d9;
+  border-radius: 16rpx;
+}
+.err-text {
+  font-size: 24rpx;
+  color: #d4380d;
+  line-height: 1.6;
+}
+.err-btn {
+  display: inline-block;
+  margin-top: 16rpx;
+  padding: 8rpx 28rpx;
+  font-size: 24rpx;
+  color: #fff;
+  background: #d4380d;
+  border-radius: 999rpx;
+}
+
+/* 评分卡 */
+.score-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40rpx 24rpx 32rpx;
+  background: linear-gradient(160deg, #eaf2ff 0%, #ffffff 70%);
+  border-radius: 24rpx;
+  box-shadow: 0 2rpx 12rpx rgba(0, 0, 0, 0.04);
+}
+.score-label {
+  font-size: 24rpx;
+  color: #8a94a6;
+  letter-spacing: 4rpx;
+}
+.score-big {
+  margin: 8rpx 0 4rpx;
+  font-size: 120rpx;
+  line-height: 1.1;
+  font-weight: 700;
+  color: #0d6efd;
+}
+.score-fabric {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+.score-time {
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  color: #9aa4b2;
+}
+
+/* 通用卡片 */
+.chart-card,
+.metrics-card,
+.meta-card {
+  margin-top: 20rpx;
+  padding: 24rpx;
+  background: #fff;
+  border-radius: 20rpx;
+  box-shadow: 0 2rpx 12rpx rgba(0, 0, 0, 0.04);
+}
+.card-title {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #33404f;
+  margin-bottom: 16rpx;
+}
+
+/* 雷达图 */
+.chart-wrap {
+  display: flex;
+  justify-content: center;
+}
+.radar-canvas {
+  width: 600rpx;
+  height: 600rpx;
+}
+.chart-tip {
+  margin-top: 12rpx;
+  font-size: 20rpx;
+  color: #9aa4b2;
+  line-height: 1.6;
+  text-align: center;
+}
+
+/* 四维数值 */
+.metric-row {
+  display: flex;
+  align-items: center;
+  padding: 16rpx 0;
+  border-bottom: 1rpx solid #f0f3f7;
+}
+.metric-row:last-child {
+  border-bottom: none;
+}
+.metric-left {
+  flex: none;
+  width: 220rpx;
+}
+.metric-name {
+  font-size: 28rpx;
+  color: #1a1a1a;
+}
+.metric-desc {
+  margin-top: 4rpx;
+  font-size: 20rpx;
+  color: #9aa4b2;
+}
+.metric-right {
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+.metric-bar {
+  flex: 1;
+  height: 16rpx;
+  background: #f0f3f7;
+  border-radius: 999rpx;
+  overflow: hidden;
+}
+.metric-bar-inner {
+  height: 100%;
+  background: linear-gradient(90deg, #7db1ff 0%, #0d6efd 100%);
+  border-radius: 999rpx;
+}
+.metric-num {
+  flex: none;
+  width: 72rpx;
+  text-align: right;
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #33404f;
+}
+
+/* 元数据 */
+.meta-row {
+  display: flex;
+  align-items: flex-start;
+  padding: 12rpx 0;
+}
+.meta-k {
+  flex: none;
+  width: 160rpx;
+  font-size: 24rpx;
+  color: #9aa4b2;
+}
+.meta-v {
+  flex: 1;
+  font-size: 24rpx;
+  color: #33404f;
+  word-break: break-all;
+}
+.meta-v.small {
+  font-size: 22rpx;
+  color: #6b7686;
+}

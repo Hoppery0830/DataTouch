@@ -1,0 +1,6 @@
+# 小程序依赖与本地私有配置（不入库）
+node_modules/
+miniprogram_npm/
+
+# 开发者工具的个人私有配置（含本地路径/个人设置，官方建议不入库）
+project.private.config.json

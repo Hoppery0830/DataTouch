@@ -1,0 +1,81 @@
+<!--pages/detail/detail.wxml  M1 实验详情-->
+<view class="page">
+  <!-- 加载 / 错误态 -->
+  <view class="state" wx:if="{{loading}}">加载中…</view>
+  <view class="err" wx:elif="{{errMsg}}">
+    <view class="err-text">{{errMsg}}</view>
+    <view class="err-btn" bindtap="onRetry">重试</view>
+  </view>
+
+  <block wx:elif="{{record}}">
+    <!-- 评分卡：综合评分大数字 -->
+    <view class="score-card">
+      <view class="score-label">综合评分</view>
+      <view class="score-big">{{compositeText}}</view>
+      <view class="score-fabric">{{fabricName}}</view>
+      <view class="score-time">{{createdAtText}}</view>
+    </view>
+
+    <!-- 四维雷达图（Canvas 2D 五边形：四维 + 综合） -->
+    <view class="chart-card">
+      <view class="card-title">四维雷达图</view>
+      <view class="chart-wrap">
+        <canvas
+          type="2d"
+          id="radar"
+          canvas-id="radar"
+          class="radar-canvas"
+        ></canvas>
+      </view>
+      <view class="chart-tip">
+        四维为 STM32 归一化值（0-100 显示）{{metricsNormalized ? '' : ' · 未归一化'}}；综合评分 0-100
+      </view>
+    </view>
+
+    <!-- 四维数值 -->
+    <view class="metrics-card">
+      <view class="card-title">四维指标</view>
+      <view class="metric-row" wx:for="{{metrics}}" wx:for-item="m" wx:key="key">
+        <view class="metric-left">
+          <view class="metric-name">{{m.label}}</view>
+          <view class="metric-desc">{{m.desc}}</view>
+        </view>
+        <view class="metric-right">
+          <view class="metric-bar">
+            <view class="metric-bar-inner" style="width: {{m.value}}%"></view>
+          </view>
+          <text class="metric-num">{{m.value}}</text>
+        </view>
+      </view>
+    </view>
+
+    <!-- 元数据 -->
+    <view class="meta-card">
+      <view class="card-title">记录信息</view>
+      <view class="meta-row">
+        <text class="meta-k">布料名称</text>
+        <text class="meta-v">{{fabricName}}</text>
+      </view>
+      <view class="meta-row">
+        <text class="meta-k">开始时间</text>
+        <text class="meta-v">{{startedAtText}}</text>
+      </view>
+      <view class="meta-row">
+        <text class="meta-k">入库时间</text>
+        <text class="meta-v">{{createdAtText}}</text>
+      </view>
+      <view class="meta-row" wx:if="{{deviceId}}">
+        <text class="meta-k">设备</text>
+        <text class="meta-v">{{deviceId}}</text>
+      </view>
+      <view class="meta-row" wx:if="{{source}}">
+        <text class="meta-k">来源</text>
+        <text class="meta-v">{{source}}</text>
+      </view>
+      <view class="meta-row" wx:if="{{dedupId}}">
+        <text class="meta-k">幂等键</text>
+        <text class="meta-v small">{{dedupId}}</text>
+      </view>
+    </view>
+  </block>
+</view>

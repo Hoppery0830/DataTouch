@@ -1,0 +1,419 @@
+/* pages/control/control.wxss  远程控制页样式
+   配色沿用 list / detail 页：主色 #0d6efd，文字 #1a1a1a / #33404f，次要 #8a94a6 / #9aa4b2 */
+
+.page {
+  min-height: 100vh;
+  padding: 24rpx 24rpx 60rpx;
+  box-sizing: border-box;
+  background: #f6f6f6;
+}
+
+/* ============ 顶部说明 ============ */
+.head {
+  padding: 8rpx 8rpx 20rpx;
+}
+.head-title {
+  font-size: 40rpx;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+.head-sub {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: #999;
+}
+/* 顶部「当前模式」一行（新增）：由最近一条 mode_* 命令推导 */
+.head-mode {
+  margin-top: 12rpx;
+  font-size: 24rpx;
+  color: #33404f;
+}
+.head-mode-val {
+  font-size: 26rpx;
+  font-weight: 700;
+  color: #0d6efd;
+}
+.head-mode-unknown {
+  color: #9aa4b2;
+}
+.head-mode-hint {
+  margin-left: 8rpx;
+  font-size: 22rpx;
+  color: #9aa4b2;
+}
+
+/* ============ 通用卡片 / 字段 ============ */
+.card {
+  padding: 24rpx;
+  margin-bottom: 20rpx;
+  background: #fff;
+  border-radius: 20rpx;
+  box-shadow: 0 2rpx 12rpx rgba(0, 0, 0, 0.04);
+}
+.field-label {
+  font-size: 26rpx;
+  font-weight: 600;
+  color: #33404f;
+}
+.field-input {
+  height: 76rpx;
+  margin-top: 16rpx;
+  padding: 0 24rpx;
+  font-size: 28rpx;
+  color: #1a1a1a;
+  background: #f7f9fc;
+  border: 1rpx solid #e6ebf2;
+  border-radius: 14rpx;
+  box-sizing: border-box;
+}
+.field-ph {
+  color: #b3bcc9;
+}
+.field-tip {
+  margin-top: 14rpx;
+  font-size: 22rpx;
+  color: #9aa4b2;
+  line-height: 1.6;
+}
+
+/* ============ 命令按钮 ============ */
+.cmd-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  margin-top: 16rpx;
+}
+.cmd-btn {
+  width: 48%;
+  margin-bottom: 16rpx;
+  padding: 24rpx 0;
+  text-align: center;
+  border-radius: 16rpx;
+  border: 1rpx solid transparent;
+  box-sizing: border-box;
+}
+.cmd-name {
+  font-size: 34rpx;
+  font-weight: 700;
+  letter-spacing: 2rpx;
+}
+.cmd-desc {
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  opacity: 0.85;
+}
+/* 配色：ARM 蓝 / START 绿 / STOP 橙 / RESET 红 */
+.cmd-info {
+  color: #0d6efd;
+  background: #eaf2ff;
+  border-color: #cfe0ff;
+}
+.cmd-ok {
+  color: #12a150;
+  background: #e9f9ef;
+  border-color: #c4ecd4;
+}
+.cmd-warn {
+  color: #e8590c;
+  background: #fff4ec;
+  border-color: #ffd9bf;
+}
+.cmd-danger {
+  color: #d4380d;
+  background: #fff0ee;
+  border-color: #ffd2cc;
+}
+/* 下发中：整体压暗 + 轻微缩放，给出明确的"已受理"反馈 */
+.cmd-busy {
+  opacity: 0.55;
+  transform: scale(0.97);
+}
+
+/* ============ 运动模式选择（新增） ============ */
+.mode-list {
+  margin-top: 16rpx;
+}
+/* 整行铺满的卡片：中文名 + 英文后缀 + 动作说明 + 右侧状态，一行一个不易误触 */
+.mode-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14rpx;
+  padding: 20rpx 24rpx;
+  border-radius: 16rpx;
+  border: 1rpx solid #e6ebf2;
+  background: #fafbfd;
+}
+.mode-item:last-child {
+  margin-bottom: 0;
+}
+.mode-main {
+  flex: 1;
+  min-width: 0;
+}
+.mode-name {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+.mode-en {
+  margin-left: 12rpx;
+  font-size: 20rpx;
+  font-weight: 500;
+  letter-spacing: 1rpx;
+  color: #9aa4b2;
+}
+.mode-act {
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  color: #8a94a6;
+}
+.mode-tail {
+  flex: none;
+  margin-left: 16rpx;
+}
+.mode-check {
+  font-size: 22rpx;
+  font-weight: 600;
+  color: #0d6efd;
+}
+.mode-send {
+  font-size: 22rpx;
+  color: #9aa4b2;
+}
+/* 选中态配色：按压蓝 / 揉搓绿 / 滑动橙（与命令按钮配色一致） */
+.mode-on {
+  border-width: 2rpx;
+}
+.mode-item.mode-on.mode-info {
+  color: #0d6efd;
+  background: #eaf2ff;
+  border-color: #0d6efd;
+}
+.mode-item.mode-on.mode-ok {
+  color: #12a150;
+  background: #e9f9ef;
+  border-color: #12a150;
+}
+.mode-item.mode-on.mode-warn {
+  color: #e8590c;
+  background: #fff4ec;
+  border-color: #e8590c;
+}
+.mode-item.mode-on .mode-check {
+  color: inherit;
+}
+/* 推导结果一行（"当前模式由最近一条「选择模式」命令推导：…"） */
+.mode-current {
+  margin-top: 16rpx;
+  padding: 14rpx 20rpx;
+  font-size: 22rpx;
+  color: #33404f;
+  background: #f0f3f7;
+  border-radius: 12rpx;
+  line-height: 1.5;
+}
+/* 模式说明小框 */
+.mode-note {
+  margin-top: 14rpx;
+  padding: 18rpx 20rpx;
+  background: #f7f9fc;
+  border: 1rpx solid #e6ebf2;
+  border-radius: 14rpx;
+}
+.mode-note-title {
+  font-size: 24rpx;
+  font-weight: 600;
+  color: #33404f;
+}
+.mode-note-line {
+  margin-top: 10rpx;
+  font-size: 22rpx;
+  color: #8a94a6;
+  line-height: 1.6;
+}
+.mode-note-foot {
+  margin-top: 12rpx;
+  font-size: 22rpx;
+  color: #0d6efd;
+  line-height: 1.6;
+}
+
+/* ============ 最近命令列表 ============ */
+.list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.list-title {
+  flex: 1;
+}
+.refresh {
+  flex: none;
+  margin-left: 16rpx;
+  padding: 4rpx 22rpx;
+  font-size: 22rpx;
+  color: #0d6efd;
+  background: #eaf2ff;
+  border-radius: 999rpx;
+}
+
+.cmd-item {
+  padding: 20rpx 0;
+  border-bottom: 1rpx solid #f0f3f7;
+}
+.cmd-item:last-child {
+  border-bottom: none;
+}
+.cmd-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.cmd-item-name {
+  flex: 1;
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #1a1a1a;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.cmd-item-mid {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8rpx;
+}
+.cmd-item-time {
+  font-size: 22rpx;
+  color: #9aa4b2;
+}
+.cmd-item-id {
+  font-size: 22rpx;
+  color: #b3bcc9;
+}
+.cmd-item-aux {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: #8a94a6;
+  line-height: 1.5;
+}
+/* 模式命令（mode_*）在列表里左侧加一条蓝色竖线，便于和动作命令区分 */
+.cmd-item-mode {
+  padding-left: 18rpx;
+  border-left: 4rpx solid #0d6efd;
+}
+
+/* 状态徽标：待发送 / 已下发 / 已执行 / 已过期 */
+.st {
+  flex: none;
+  margin-left: 16rpx;
+  padding: 4rpx 18rpx;
+  font-size: 22rpx;
+  border-radius: 999rpx;
+  white-space: nowrap;
+}
+.st-pending {
+  color: #6b7686;
+  background: #f0f3f7;
+}
+.st-sent {
+  color: #0d6efd;
+  background: #eaf2ff;
+}
+.st-done {
+  color: #12a150;
+  background: #e9f9ef;
+}
+.st-expired {
+  color: #e8590c;
+  background: #fff4ec;
+}
+
+/* ============ 错误 / 加载 / 空态 ============ */
+.err {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16rpx;
+  padding: 20rpx 24rpx;
+  background: #fff5f5;
+  border: 1rpx solid #ffd9d9;
+  border-radius: 16rpx;
+}
+.err-text {
+  flex: 1;
+  font-size: 24rpx;
+  color: #d4380d;
+  line-height: 1.5;
+}
+.err-btn {
+  flex: none;
+  margin-left: 20rpx;
+  padding: 8rpx 24rpx;
+  font-size: 24rpx;
+  color: #fff;
+  background: #d4380d;
+  border-radius: 999rpx;
+}
+.state {
+  padding: 80rpx 40rpx;
+  text-align: center;
+}
+.state-title {
+  font-size: 28rpx;
+  color: #5a6472;
+}
+.state-tip {
+  margin-top: 12rpx;
+  font-size: 22rpx;
+  color: #9aa4b2;
+}
+.empty {
+  padding: 70rpx 20rpx;
+  text-align: center;
+}
+.empty-title {
+  font-size: 30rpx;
+  color: #5a6472;
+}
+.empty-tip {
+  margin-top: 14rpx;
+  font-size: 24rpx;
+  color: #9aa4b2;
+  line-height: 1.6;
+}
+.foot {
+  padding: 20rpx 0 4rpx;
+  text-align: center;
+  font-size: 22rpx;
+  color: #9aa4b2;
+}
+
+/* ============ 安全提示（醒目） ============ */
+.safety {
+  padding: 24rpx;
+  background: #fff8e6;
+  border: 1rpx solid #ffe2a8;
+  border-radius: 20rpx;
+}
+.safety-title {
+  font-size: 28rpx;
+  font-weight: 700;
+  color: #b26a00;
+}
+.safety-line {
+  margin-top: 12rpx;
+  font-size: 23rpx;
+  color: #8a5a00;
+  line-height: 1.65;
+}
+.safety-strong {
+  font-weight: 700;
+  color: #d4380d;
+}
+
+.st-accepted { color:#315fe8;background:#edf2ff; }
+.st-failed,.st-unknown { color:#b42318;background:#fff0ed; }
+.st-cancelled { color:#777;background:#eee; }

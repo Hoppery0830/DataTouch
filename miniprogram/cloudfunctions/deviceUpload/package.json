@@ -1,0 +1,14 @@
+{
+  "name": "deviceUpload",
+  "version": "1.0.0",
+  "description": "M1 设备上云入口：校验共享密钥 + dedupId 幂等，写入 experiments 集合",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "wx-server-sdk": "~2.4.0"
+  }
+}

@@ -1,0 +1,374 @@
+/* pages/list/list.wxss  M2 实验记录列表样式（搜索 / 排序 / 筛选 + 列表卡片）
+   配色沿用 detail 页：主色 #0d6efd，文字 #1a1a1a / #33404f，次要 #8a94a6 / #9aa4b2 */
+
+.page {
+  min-height: 100vh;
+  padding: 24rpx 24rpx 48rpx;
+  box-sizing: border-box;
+  background: #f6f6f6;
+}
+
+/* 顶部说明 */
+.head {
+  padding: 8rpx 8rpx 20rpx;
+}
+.head-title {
+  font-size: 40rpx;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+.head-sub {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: #999;
+}
+
+/* ============ 远程控制入口（M3 追加，样式沿用卡片风格） ============ */
+.ctrl-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 22rpx 24rpx;
+  margin-bottom: 20rpx;
+  background: #fff;
+  border: 1rpx solid #e6ebf2;
+  border-radius: 20rpx;
+  box-shadow: 0 2rpx 12rpx rgba(0, 0, 0, 0.04);
+}
+.ctrl-left {
+  flex: 1;
+  overflow: hidden;
+}
+.ctrl-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #0d6efd;
+}
+.ctrl-sub {
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  color: #9aa4b2;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ctrl-arrow {
+  flex: none;
+  margin-left: 16rpx;
+  font-size: 40rpx;
+  color: #c3ccd8;
+}
+
+/* ============ 搜索框 ============ */
+.search {
+  display: flex;
+  align-items: center;
+  height: 76rpx;
+  padding: 0 24rpx;
+  background: #fff;
+  border-radius: 999rpx;
+  box-shadow: 0 2rpx 12rpx rgba(0, 0, 0, 0.04);
+}
+.search-input {
+  flex: 1;
+  height: 76rpx;
+  font-size: 28rpx;
+  color: #1a1a1a;
+}
+.search-ph {
+  color: #b3bcc9;
+}
+.search-clear {
+  flex: none;
+  width: 48rpx;
+  height: 48rpx;
+  line-height: 48rpx;
+  text-align: center;
+  font-size: 26rpx;
+  color: #9aa4b2;
+  background: #f0f3f7;
+  border-radius: 50%;
+}
+
+/* ============ 排序 / 筛选工具条（吸顶） ============ */
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  margin-top: 20rpx;
+  padding: 16rpx 20rpx 8rpx;
+  background: #f6f6f6;
+  border-radius: 20rpx;
+}
+.bar-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12rpx;
+}
+.bar-label {
+  flex: none;
+  width: 64rpx;
+  font-size: 22rpx;
+  color: #9aa4b2;
+}
+.chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.chips-scroll {
+  flex: 1;
+  white-space: nowrap;
+}
+.chips-scroll .chips {
+  display: inline-flex;
+  flex-wrap: nowrap;
+}
+.chip {
+  flex: none;
+  margin: 0 12rpx 12rpx 0;
+  padding: 8rpx 22rpx;
+  font-size: 24rpx;
+  color: #5a6472;
+  background: #fff;
+  border: 1rpx solid #e6ebf2;
+  border-radius: 999rpx;
+}
+.chip-on {
+  color: #0d6efd;
+  font-weight: 600;
+  background: #eaf2ff;
+  border-color: #0d6efd;
+}
+
+/* ============ 结果摘要 ============ */
+.summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 4rpx 8rpx 16rpx;
+  font-size: 22rpx;
+  color: #9aa4b2;
+}
+.summary-count {
+  margin-right: 16rpx;
+  color: #5a6472;
+}
+.summary-filter {
+  flex: 1;
+  color: #8a94a6;
+}
+.summary-reset {
+  flex: none;
+  margin-left: 16rpx;
+  padding: 4rpx 20rpx;
+  font-size: 22rpx;
+  color: #0d6efd;
+  background: #eaf2ff;
+  border-radius: 999rpx;
+}
+
+.hint {
+  margin-bottom: 16rpx;
+  padding: 12rpx 20rpx;
+  font-size: 22rpx;
+  color: #b26a00;
+  background: #fff8e6;
+  border: 1rpx solid #ffe2a8;
+  border-radius: 12rpx;
+}
+
+/* 错误提示条 */
+.err {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20rpx 24rpx;
+  margin-bottom: 20rpx;
+  background: #fff5f5;
+  border: 1rpx solid #ffd9d9;
+  border-radius: 16rpx;
+}
+.err-text {
+  flex: 1;
+  font-size: 24rpx;
+  color: #d4380d;
+  line-height: 1.5;
+}
+.err-btn {
+  flex: none;
+  margin-left: 20rpx;
+  padding: 8rpx 24rpx;
+  font-size: 24rpx;
+  color: #fff;
+  background: #d4380d;
+  border-radius: 999rpx;
+}
+
+/* 加载状态 */
+.state {
+  padding: 120rpx 40rpx;
+  text-align: center;
+}
+.state-title {
+  font-size: 28rpx;
+  color: #5a6472;
+}
+.state-tip {
+  margin-top: 12rpx;
+  font-size: 22rpx;
+  color: #9aa4b2;
+}
+
+/* 记录卡片 */
+.card {
+  padding: 24rpx;
+  margin-bottom: 20rpx;
+  background: #fff;
+  border-radius: 20rpx;
+  box-shadow: 0 2rpx 12rpx rgba(0, 0, 0, 0.04);
+}
+.card-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.fabric {
+  flex: 1;
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #1a1a1a;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.score {
+  flex: none;
+  margin-left: 16rpx;
+}
+.score-num {
+  font-size: 44rpx;
+  font-weight: 700;
+  color: #0d6efd;
+}
+/* 评分分档：≥80 绿 / 60-79 蓝 / <60 橙 */
+.score-high {
+  color: #12a150;
+}
+.score-mid {
+  color: #0d6efd;
+}
+.score-low {
+  color: #e8590c;
+}
+.score-none {
+  color: #b3bcc9;
+  font-size: 36rpx;
+}
+.score-unit {
+  margin-left: 4rpx;
+  font-size: 22rpx;
+  color: #9aa4b2;
+}
+
+/* 四维小字 */
+.metrics {
+  display: flex;
+  margin-top: 18rpx;
+}
+.metric {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10rpx 0;
+  background: #f7f9fc;
+  border-radius: 12rpx;
+  margin-right: 12rpx;
+}
+.metric:last-child {
+  margin-right: 0;
+}
+.metric-label {
+  font-size: 22rpx;
+  color: #8a94a6;
+}
+.metric-value {
+  margin-top: 4rpx;
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #33404f;
+}
+
+/* 底部标签与时间 */
+.card-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16rpx;
+}
+.tags {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  overflow: hidden;
+}
+.tag {
+  flex: none;
+  max-width: 320rpx;
+  margin-right: 12rpx;
+  padding: 2rpx 14rpx;
+  font-size: 20rpx;
+  border-radius: 8rpx;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tag-source {
+  color: #0d6efd;
+  background: #eaf2ff;
+}
+.tag-device {
+  color: #6b7686;
+  background: #f0f3f7;
+}
+.time {
+  flex: none;
+  font-size: 22rpx;
+  color: #9aa4b2;
+}
+
+/* 空态 */
+.empty {
+  padding: 120rpx 40rpx;
+  text-align: center;
+}
+.empty-title {
+  font-size: 30rpx;
+  color: #5a6472;
+}
+.empty-tip {
+  margin-top: 16rpx;
+  font-size: 24rpx;
+  color: #9aa4b2;
+  line-height: 1.6;
+}
+.empty-btn {
+  display: inline-block;
+  margin-top: 32rpx;
+  padding: 12rpx 40rpx;
+  font-size: 26rpx;
+  color: #0d6efd;
+  background: #eaf2ff;
+  border: 1rpx solid #cfe0ff;
+  border-radius: 999rpx;
+}
+
+/* 底部状态 */
+.foot {
+  padding: 24rpx 0 8rpx;
+  text-align: center;
+  font-size: 24rpx;
+  color: #9aa4b2;
+}
