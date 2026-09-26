@@ -1,6 +1,6 @@
 > This PlatformIO project now lives in ESP32/. Shared documentation is in ../docs/.
 
-> 当前为三端电机联调固件：上电不运动，选择模式 → ARM → START；详见 [docs/电机联调.md](../docs/电机联调.md)。以下旧演示说明不代表当前启动配置。
+> 当前为三端电机联调固件：上电不运动，选择模式 → ARM → START。以下旧演示说明不代表当前启动配置。
 
 # YD-ESP32-S3 主控通信与手机端网关
 
@@ -19,7 +19,7 @@ DataTouch/ESP32/               # 仓库根目录
 ├── platformio.ini      # 工程配置（N16R8 / 16MB / qio_opi / 库依赖）
 ├── README.md           # 本说明
 ├── docs\
-│   └── 产品端方案对比.md    # 产品形态 / 配网方式对比
+│   └── 当前框架说明.md    # 公共架构说明，位于 ../docs/
 └── src\
     ├── main.cpp        # WiFi(配网/门户/mDNS) + WebSocket + UART 收发 + DEMO
     ├── protocol.h      # STM32<->ESP32 二进制帧协议 + CRC8
@@ -81,7 +81,7 @@ DataTouch/ESP32/               # 仓库根目录
 ## 六、设备上云（HTTPS 上传实验记录）
 
 > 模块：`src/cloud_upload.h` / `src/cloud_upload.cpp`（**新增，只加不改**：`protocol.h` 零改动，WiFi 配网 / WebSocket / 内嵌显示页 / DEMO 逻辑都不动）
-> 方案背景见 `../docs\小程序与微信云开发落地方案.md`（§5 设备上云、§8 上传协议）。
+> 本节说明设备上云流程与上传协议。
 
 ### 6.1 用途
 
@@ -250,7 +250,7 @@ DataTouch/ESP32/               # 仓库根目录
 
 - HTTPS 目前用 `client.setInsecure()`（**不校验证书链**，先跑通链路）。正式版应改为内置根 CA：
   `client.setCACert(ROOT_CA_PEM);` 或用 `client.setFingerprint("AA:BB:...")` 做指纹校验（代码中已留注释）。
-- `token` 是**明文共享密钥**：不要提交进 Git；建议后续升级为每设备独立密钥 + HMAC 签名（见 `../docs\小程序与微信云开发落地方案.md` §5.3）。
+- `token` 是**明文共享密钥**：不要提交进 Git；建议后续升级为每设备独立密钥 + HMAC 签名。
 - 上云只传**摘要**（四维 + 评分 + 元数据，约 300 字节），不传曲线/原始数据，省云端额度。
 - **远程控制（§6.10）**：白名单只有 `arm/start/stop/reset`，且有编译期总开关 `CLOUD_CMD_ENABLE`；
   但**远程命令有延迟（≥ 轮询间隔 2s + 一次 HTTPS），不是实时控制 —— 现场操作永远优先**；

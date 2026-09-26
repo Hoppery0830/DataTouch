@@ -11,7 +11,7 @@ DataTouch 包含 STM32 主控、电机控制、ESP32 联网网关、K230 视觉�
 | `K230/` | 视觉处理、部署脚本和测试 | `README.md` |
 | `ESP32/` | 串口通信、Wi-Fi、网页和云端通信 | `platformio.ini`、`README.md` |
 | `miniprogram/` | 微信小程序及云函数 | `project.config.json`、`README.md` |
-| `docs/` | 跨端协议、系统架构、供电及技术方案 | `电机联调.md` |
+| `docs/` | 跨端协议、系统架构、供电及技术方案 | `当前框架说明.md` |
 
 ## 打开和构建
 
