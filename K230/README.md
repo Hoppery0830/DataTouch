@@ -45,7 +45,7 @@ Large firmware images and build outputs are intentionally not tracked.
 From the repository root:
 
 ```powershell
-python -m unittest discover -s k230/tests -p "test_*.py" -v
+python -m unittest discover -s K230/tests -p "test_*.py" -v
 ```
 
 The tests cover the frozen hardware/output contract, call order, framing,
@@ -56,9 +56,9 @@ checksum, float32 packing, timeout, retry, and receive resynchronization.
 With the board's USB REPL available as COM14:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\k230\upload_k230_final_deploy.ps1 `
+powershell -ExecutionPolicy Bypass -File .\K230\upload_k230_final_deploy.ps1 `
   -Port COM14 -DeployRoot .\k230
-powershell -ExecutionPolicy Bypass -File .\k230\start_k230_final_deploy.ps1 `
+powershell -ExecutionPolicy Bypass -File .\K230\start_k230_final_deploy.ps1 `
   -Port COM14 -TimeoutSeconds 30
 ```
 

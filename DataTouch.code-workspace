@@ -1,0 +1,10 @@
+{
+  "folders": [
+    { "name": "STM32F407VET6", "path": "STM32F407VET6" },
+    { "name": "STM32F1", "path": "STM32F1" },
+    { "name": "K230", "path": "K230" },
+    { "name": "ESP32", "path": "ESP32" },
+    { "name": "miniprogram", "path": "miniprogram" },
+    { "name": "docs", "path": "docs" }
+  ]
+}
