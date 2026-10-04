@@ -45,3 +45,20 @@ assert 'RemoteTask_Init();' in read('source/task/app_rtos.c')
 assert 'Remote_Update(&remote' in read('source/task/Motor_Task/motor_task.c')
 assert 'module/remote/remote_control.c' in read('source/CMakeLists.txt')
 print('PASS: USART3 IRQ, static RemoteTask and MotorTask remote controller integration')
+
+# Touch owns these resources outside CubeMX-generated files. Detect regeneration conflicts.
+assert 'TouchTask_Init();' in read('source/task/app_rtos.c')
+touch_bsp = read('source/bsp/touch/touch_bsp.c')
+assert 'sample_timer.Instance = TIM3;' in touch_bsp
+assert 'ADC_EXTERNALTRIGCONV_T3_TRGO' in touch_bsp
+assert 'DMA_MDATAALIGN_HALFWORD' in touch_bsp
+for handler in ('UART4', 'USART1', 'DMA1_Stream2', 'DMA2_Stream0', 'DMA2_Stream7', 'ADC'):
+    pattern = rf'void\s+{handler}_IRQHandler\s*\(void\)\s*\{{'
+    definitions = sum(len(re.findall(pattern, f.read_text(encoding='utf-8')))
+                      for directory in ('source', 'Core/Src') for f in (r/directory).rglob('*.c'))
+    assert definitions == 1, (handler, definitions)
+for hook in ('Touch_UART_RxEvent', 'Touch_UART_TxComplete', 'Touch_UART_Error'):
+    assert hook + '(h);' in read('source/bsp/uart/uart_bsp.c')
+for component in ('bsp/touch/touch_bsp.c', 'module/touch/touch_processing.c', 'task/Touch_Task/touch_task.c'):
+    assert component in read('source/CMakeLists.txt')
+print('PASS: TouchTask, TIM3/ADC trigger, DMA width, unique touch IRQs and shared UART callbacks')

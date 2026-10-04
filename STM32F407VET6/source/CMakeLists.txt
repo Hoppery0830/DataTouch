@@ -1,4 +1,7 @@
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/module/touch/touch_processing.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/bsp/touch/touch_bsp.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/task/Touch_Task/touch_task.c
     ${CMAKE_CURRENT_SOURCE_DIR}/module/remote/remote_protocol.c
     ${CMAKE_CURRENT_SOURCE_DIR}/module/remote/remote_control.c
     ${CMAKE_CURRENT_SOURCE_DIR}/bsp/esp_uart/esp_uart.c
@@ -23,6 +26,9 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/task/app_rtos.c
 )
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/module/touch
+    ${CMAKE_CURRENT_SOURCE_DIR}/bsp/touch
+    ${CMAKE_CURRENT_SOURCE_DIR}/task/Touch_Task
     ${CMAKE_CURRENT_SOURCE_DIR}/module/remote
     ${CMAKE_CURRENT_SOURCE_DIR}/bsp/esp_uart
     ${CMAKE_CURRENT_SOURCE_DIR}/task/Remote_Task

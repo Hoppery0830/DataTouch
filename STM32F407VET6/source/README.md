@@ -21,6 +21,9 @@
 | BSP | [dwt](bsp/dwt/README.md) | 64 位单调微秒计时 |
 | BSP | [uart](bsp/uart/README.md) | 三路 DMA 收发与环形缓冲 |
 | BSP | [buzzer](bsp/buzzer/README.md) | PE3 有源蜂鸣器 GPIO |
+| BSP | [touch](bsp/touch/README.md) | UART4 六维力、TIM3/ADC1 采样、USART1 电脑输出 |
+| module | [touch](module/touch/README.md) | 六维力 CRC 解帧、ADXL335 标定与块 RMS |
+| task | [Touch_Task](task/Touch_Task/README.md) | 静态触觉采集任务与 F/A/S 文本输出 |
 | module | [motor](module/motor/README.md) | Emm 协议、事务、反馈与故障 |
 | module | [buzzer](module/buzzer/README.md) | 有源蜂鸣器通断节奏 |
 | task | [Motor_Task](task/Motor_Task/README.md) | 运动路径及命令分发 |

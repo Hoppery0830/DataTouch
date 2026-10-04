@@ -1,2 +1,6 @@
 build/
 backup_before_framework/
+tools/integrated_force_*.csv
+tools/integrated_adxl_*.csv
+tools/fabric_features_*.csv
+tools/integrated_*.png

@@ -8,6 +8,9 @@
 /* Other UART transports share HAL callbacks without sharing motor DMA buffers. */
 __attribute__((weak)) void ESP_UART_TxComplete(UART_HandleTypeDef *h){(void)h;}
 __attribute__((weak)) void ESP_UART_Error(UART_HandleTypeDef *h){(void)h;}
+__attribute__((weak)) void Touch_UART_RxEvent(UART_HandleTypeDef *h){(void)h;}
+__attribute__((weak)) void Touch_UART_TxComplete(UART_HandleTypeDef *h){(void)h;}
+__attribute__((weak)) void Touch_UART_Error(UART_HandleTypeDef *h){(void)h;}
 uart_port_t g_motor_ports[APP_MOTOR_COUNT];
 /** @brief 按 HAL 句柄查找持久化串口对象；未知串口返回 NULL，不接管其他外设回调。 */
 static uart_port_t *find(UART_HandleTypeDef *h)
@@ -78,6 +81,7 @@ bool UART_BSP_Recover(uart_port_t *p)
  * 同一端口 UART 和 DMA IRQ 配成相同抢占优先级，防止两个生产者并发修改 head。 */
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *h, uint16_t size)
 {
+    Touch_UART_RxEvent(h);
     (void)size;
     uart_port_t *p = find(h);
     if (!p || p->broken)
@@ -105,6 +109,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *h, uint16_t size)
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *h)
 {
     ESP_UART_TxComplete(h);
+    Touch_UART_TxComplete(h);
     uart_port_t *p = find(h);
     if (p)
     {
@@ -116,6 +121,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *h)
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *h)
 {
     ESP_UART_Error(h);
+    Touch_UART_Error(h);
     uart_port_t *p = find(h);
     if (p)
     {

@@ -7,14 +7,16 @@
 | g_motor_commands | 4 | motor_command_t，按值复制完整路径 | MotorTask |
 | g_buzzer_commands | 4 | buzzer_pattern_t | ServiceTask |
 
-初始化链：`osKernelInitialize()` → `MX_FREERTOS_Init()` 的 USER CODE Init → `App_RTOS_Objects_Init()` → CubeMX 创建两个线程 → 检查句柄 → `osKernelStart()`。
+初始化链：`osKernelInitialize()` → `MX_FREERTOS_Init()` 的 USER CODE Init → `App_RTOS_Objects_Init()`（创建公共队列、RemoteTask、TouchTask）→ CubeMX 创建 MotorTask/ServiceTask → 检查句柄 → `osKernelStart()`。
 
 | 任务 | 优先级 | 栈 | 调度 |
 |---|---|---|---|
 | MotorTask | osPriorityAboveNormal1 | 1024 Words = 4096B | UART/节拍/命令/停止标志，最多等 2 tick |
+| TouchTask | osPriorityNormal1 | 1024 Words = 4096B | 每 1 tick 消费 DMA 数据，限频输出电脑文本 |
+| RemoteTask | osPriorityNormal | 768 Words = 3072B | 每 2 tick 推进 ESP32 控制链路 |
 | ServiceTask | osPriorityLow | 512 Words = 2048B | 每 5 tick 推进服务 |
 
-当前 tick=1000Hz，两个任务均静态分配，CubeMX 入口选 Weak。正式强定义在各自目录，不重复创建任务。内核仍允许动态分配，静态业务队列不代表整个系统完全不用堆。
+当前 tick=1000Hz，四个任务均静态分配；MotorTask/ServiceTask 的 CubeMX 入口选 Weak，正式强定义在各自目录。RemoteTask/TouchTask 在自建代码集中创建，不在 CubeMX 重复添加。内核仍允许动态分配，静态业务队列不代表整个系统完全不用堆。
 
 ## 并发边界
 

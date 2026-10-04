@@ -11,8 +11,8 @@ const axis_config_t g_axis_config[AXIS_COUNT] = {
 
 /* 位置控制的初始试验参数。没有力反馈，不代表恒定压力；不自动执行。 */
 const motor_action_config_t g_action_config[ACTION_MODE_COUNT] = {
-    [ACTION_PRESS] = {.z_press_mm = 3.0f,
-                      .z_speed_mm_s = 1.0f,
+    [ACTION_PRESS] = {.z_press_mm = 6.0f,
+                      .z_speed_mm_s = 1.5f,
                       .hold_ms = 300,
                       .segment_timeout_ms = 15000},
     [ACTION_RUB] = {.z_press_mm = 3.0f,

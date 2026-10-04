@@ -6,6 +6,7 @@
 #include "app_rtos.h"
 #include "main.h"
 #include "remote_task.h"
+#include "touch_task.h"
 QueueHandle_t g_motor_commands, g_buzzer_commands;
 static StaticQueue_t motor_cb, buzzer_cb;
 static uint8_t motor_storage[4 * sizeof(motor_command_t)];
@@ -17,6 +18,7 @@ void App_RTOS_Objects_Init(void)
     g_motor_commands = xQueueCreateStatic(4, sizeof(motor_command_t), motor_storage, &motor_cb);
     g_buzzer_commands = xQueueCreateStatic(4, sizeof(buzzer_pattern_t), buzzer_storage, &buzzer_cb);
     RemoteTask_Init();
+    TouchTask_Init();
     if (!g_motor_commands || !g_buzzer_commands)
         Error_Handler();
 }
