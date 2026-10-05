@@ -91,7 +91,7 @@ K230 KEY request
   -> LIGHT_OFF
   <- ACK(0x10, OK)
   -> calculate frozen U_curve
-  -> append timestamp,U_curve to the existing SD TXT
+  -> append measurement_index,U_curve to the existing SD TXT (1, 2, 3, ...)
   -> U_CURVE(float32 little-endian)
   <- ACK(0x20, OK)
 ```

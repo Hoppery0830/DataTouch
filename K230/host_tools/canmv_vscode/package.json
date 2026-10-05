@@ -1,0 +1,484 @@
+{
+	"name": "canmv-vscode",
+	"displayName": "CanMV",
+	"description": "%extension.description%",
+	"version": "0.9.10",
+	"publisher": "kendryte747",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/kendryte/canmv-vscode-extension.git",
+		"directory": "extension"
+	},
+	"bugs": {
+		"url": "https://github.com/kendryte/canmv-vscode-extension/issues"
+	},
+	"homepage": "https://github.com/kendryte/canmv-vscode-extension#readme",
+	"icon": "resources/canmv_icon.png",
+	"preview": false,
+	"galleryBanner": {
+		"color": "#005189",
+		"theme": "dark"
+	},
+	"categories": [
+		"Other"
+	],
+	"keywords": [
+		"CanMV",
+		"K230",
+		"MicroPython",
+		"embedded",
+		"vision",
+		"camera"
+	],
+	"engines": {
+		"vscode": "^1.90.0"
+	},
+	"extensionDependencies": [
+		"ms-python.vscode-pylance"
+	],
+	"activationEvents": [
+		"onStartupFinished",
+		"onMcpServerDefinitionProvider:canmv.mcp",
+		"onCommand:canmv.configureMcpClients",
+		"onCommand:canmv.showMcpConfiguration",
+		"onCommand:canmv.connectBoard",
+		"onCommand:canmv.disconnectBoard",
+		"onCommand:canmv.runCurrentScript",
+		"onCommand:canmv.stopScript",
+		"onCommand:canmv.startPreview",
+		"onCommand:canmv.stopPreview",
+		"onCommand:canmv.runRemoteFile",
+		"onCommand:canmv.runExampleFile",
+		"onCommand:canmv.openTool",
+		"onCommand:canmv.openThresholdEditor",
+		"onCommand:canmv.newRemoteFile",
+		"onCommand:canmv.newRemoteFolder",
+		"onCommand:canmv.renameRemoteItem",
+		"onCommand:canmv.deleteRemoteItem",
+		"onCommand:canmv.uploadFiles",
+		"onCommand:canmv.uploadFolder",
+		"onCommand:canmv.downloadRemoteItem",
+		"onView:canmv.controls",
+		"onView:canmv.toolbox",
+		"onView:canmv.explorer",
+		"onView:canmv.examples",
+		"onView:canmv.terminalView"
+	],
+	"main": "./out/extension.js",
+	"l10n": "./l10n",
+	"contributes": {
+		"commands": [
+			{
+				"command": "canmv.configureMcpClients",
+				"title": "%canmv.command.configureMcpClients%",
+				"icon": "$(tools)"
+			},
+			{
+				"command": "canmv.showMcpConfiguration",
+				"title": "%canmv.command.showMcpConfiguration%",
+				"icon": "$(json)"
+			},
+			{
+				"command": "canmv.connectBoard",
+				"title": "%canmv.command.connectBoard%",
+				"icon": "$(plug)",
+				"enablement": "canmv.disconnected && !canmv.connectionBusy && !canmv.scriptBusy"
+			},
+			{
+				"command": "canmv.disconnectBoard",
+				"title": "%canmv.command.disconnectBoard%",
+				"icon": "$(debug-disconnect)",
+				"enablement": "canmv.connected && !canmv.connectionBusy && !canmv.scriptBusy"
+			},
+			{
+				"command": "canmv.runCurrentScript",
+				"title": "%canmv.command.runCurrentScript%",
+				"icon": "$(run)",
+				"enablement": "canmv.connected && !canmv.connectionBusy && !canmv.scriptBusy"
+			},
+			{
+				"command": "canmv.stopScript",
+				"title": "%canmv.command.stopScript%",
+				"icon": "$(debug-stop)",
+				"enablement": "canmv.connected && canmv.scriptRunning && !canmv.connectionBusy && !canmv.scriptBusy"
+			},
+			{
+				"command": "canmv.startPreview",
+				"title": "%canmv.command.startPreview%",
+				"icon": "$(device-camera)"
+			},
+			{
+				"command": "canmv.stopPreview",
+				"title": "%canmv.command.stopPreview%",
+				"icon": "$(circle-slash)"
+			},
+			{
+				"command": "canmv.runRemoteFile",
+				"title": "%canmv.command.runRemoteFile%",
+				"icon": "$(play)",
+				"enablement": "canmv.connected && !canmv.connectionBusy && !canmv.scriptBusy"
+			},
+			{
+				"command": "canmv.runExampleFile",
+				"title": "%canmv.command.runExampleFile%",
+				"icon": "$(play)",
+				"enablement": "canmv.connected && !canmv.connectionBusy && !canmv.scriptBusy"
+			},
+			{
+				"command": "canmv.openTool",
+				"title": "%canmv.command.openTool%",
+				"icon": "$(tools)"
+			},
+			{
+				"command": "canmv.openThresholdEditor",
+				"title": "%canmv.command.openThresholdEditor%",
+				"icon": "$(settings)"
+			},
+			{
+				"command": "canmv.refreshExplorer",
+				"title": "%canmv.command.refreshExplorer%",
+				"icon": "$(refresh)"
+			},
+			{
+				"command": "canmv.runOnK230",
+				"title": "%canmv.command.runOnK230%",
+				"icon": "$(debug-start)",
+				"enablement": "canmv.connected && !canmv.connectionBusy && !canmv.scriptBusy"
+			},
+			{
+				"command": "canmv.saveAsMainPy",
+				"title": "%canmv.command.saveAsMainPy%",
+				"icon": "$(save-as)",
+				"enablement": "canmv.remoteFilesAvailable"
+			},
+			{
+				"command": "canmv.saveAsBootPy",
+				"title": "%canmv.command.saveAsBootPy%",
+				"icon": "$(save-as)",
+				"enablement": "canmv.remoteFilesAvailable"
+			},
+			{
+				"command": "canmv.newRemoteFile",
+				"title": "%canmv.command.newRemoteFile%",
+				"icon": "$(new-file)"
+			},
+			{
+				"command": "canmv.newRemoteFolder",
+				"title": "%canmv.command.newRemoteFolder%",
+				"icon": "$(new-folder)"
+			},
+			{
+				"command": "canmv.renameRemoteItem",
+				"title": "%canmv.command.renameRemoteItem%",
+				"icon": "$(edit)"
+			},
+			{
+				"command": "canmv.deleteRemoteItem",
+				"title": "%canmv.command.deleteRemoteItem%",
+				"icon": "$(trash)"
+			},
+			{
+				"command": "canmv.uploadFiles",
+				"title": "%canmv.command.uploadFiles%",
+				"icon": "$(cloud-upload)"
+			},
+			{
+				"command": "canmv.uploadFolder",
+				"title": "%canmv.command.uploadFolder%",
+				"icon": "$(folder-opened)"
+			},
+			{
+				"command": "canmv.downloadRemoteItem",
+				"title": "%canmv.command.downloadRemoteItem%",
+				"icon": "$(cloud-download)"
+			},
+			{
+				"command": "canmv.refreshExamples",
+				"title": "%canmv.command.refreshExamples%",
+				"icon": "$(refresh)"
+			},
+			{
+				"command": "canmv.revealExamples",
+				"title": "%canmv.command.revealExamples%",
+				"icon": "$(go-to-file)"
+			},
+			{
+				"command": "canmv.openExampleFile",
+				"title": "%canmv.command.openExampleFile%",
+				"icon": "$(file)"
+			}
+		],
+		"views": {
+			"canmv": [
+				{
+					"type": "webview",
+					"id": "canmv.controls",
+					"name": "%canmv.view.controls%",
+					"icon": "$(remote)"
+				},
+				{
+					"id": "canmv.toolbox",
+					"name": "%canmv.view.toolbox%",
+					"icon": "$(tools)"
+				},
+				{
+					"id": "canmv.explorer",
+					"name": "%canmv.view.device%",
+					"icon": "$(folder)"
+				},
+				{
+					"id": "canmv.examples",
+					"name": "%canmv.view.examples%",
+					"icon": "$(library)"
+				}
+			],
+			"canmv-terminal": [
+				{
+					"id": "canmv.terminalView",
+					"name": "%canmv.view.terminal%",
+					"type": "webview"
+				}
+			]
+		},
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "canmv",
+					"title": "CanMV",
+					"icon": "resources/canmv_icon.png"
+				}
+			],
+			"panel": [
+				{
+					"id": "canmv-terminal",
+					"title": "%canmv.view.terminal%",
+					"icon": "$(terminal)"
+				}
+			]
+		},
+		"menus": {
+			"view/title": [
+				{
+					"command": "canmv.connectBoard",
+					"when": "view == canmv.controls && !canmv.connected",
+					"group": "navigation@1"
+				},
+				{
+					"command": "canmv.disconnectBoard",
+					"when": "view == canmv.controls && canmv.connected",
+					"group": "navigation@2"
+				},
+				{
+					"command": "canmv.runCurrentScript",
+					"when": "view == canmv.controls && canmv.connected",
+					"group": "navigation@3"
+				},
+				{
+					"command": "canmv.stopScript",
+					"when": "view == canmv.controls && canmv.connected && canmv.scriptRunning",
+					"group": "navigation@3"
+				},
+				{
+					"command": "canmv.refreshExplorer",
+					"when": "view == canmv.explorer",
+					"group": "navigation@1"
+				},
+				{
+					"command": "canmv.refreshExamples",
+					"when": "view == canmv.examples",
+					"group": "navigation@1"
+				},
+				{
+					"command": "canmv.revealExamples",
+					"when": "view == canmv.examples",
+					"group": "navigation@2"
+				},
+				{
+					"command": "canmv.downloadRemoteItem",
+					"when": "view == canmv.explorer && canmv.remoteFilesAvailable && canmv.explorerSelected",
+					"group": "navigation@2"
+				},
+				{
+					"command": "canmv.uploadFiles",
+					"when": "view == canmv.explorer && canmv.remoteFilesAvailable && canmv.explorerSelectedDirectory",
+					"group": "navigation@3"
+				},
+				{
+					"command": "canmv.uploadFolder",
+					"when": "view == canmv.explorer && canmv.remoteFilesAvailable && canmv.explorerSelectedDirectory",
+					"group": "navigation@4"
+				},
+				{
+					"command": "canmv.renameRemoteItem",
+					"when": "view == canmv.explorer && canmv.remoteFilesAvailable && canmv.explorerSelectedMutable",
+					"group": "navigation@5"
+				},
+				{
+					"command": "canmv.deleteRemoteItem",
+					"when": "view == canmv.explorer && canmv.remoteFilesAvailable && canmv.explorerSelectedMutable",
+					"group": "navigation@6"
+				}
+			],
+			"view/item/context": [
+				{
+					"command": "canmv.runRemoteFile",
+					"when": "view == canmv.explorer && viewItem == pythonFile && canmv.remoteFilesAvailable",
+					"group": "inline@1"
+				},
+				{
+					"command": "canmv.newRemoteFile",
+					"when": "view == canmv.explorer && canmv.remoteFilesAvailable && (viewItem == mountRoot || viewItem == directory)",
+					"group": "1_new@1"
+				},
+				{
+					"command": "canmv.newRemoteFolder",
+					"when": "view == canmv.explorer && canmv.remoteFilesAvailable && (viewItem == mountRoot || viewItem == directory)",
+					"group": "1_new@2"
+				},
+				{
+					"command": "canmv.uploadFiles",
+					"when": "view == canmv.explorer && canmv.remoteFilesAvailable && (viewItem == mountRoot || viewItem == directory)",
+					"group": "1_new@3"
+				},
+				{
+					"command": "canmv.uploadFolder",
+					"when": "view == canmv.explorer && canmv.remoteFilesAvailable && (viewItem == mountRoot || viewItem == directory)",
+					"group": "1_new@4"
+				},
+				{
+					"command": "canmv.renameRemoteItem",
+					"when": "view == canmv.explorer && canmv.remoteFilesAvailable && (viewItem == file || viewItem == pythonFile || viewItem == directory)",
+					"group": "2_edit@1"
+				},
+				{
+					"command": "canmv.deleteRemoteItem",
+					"when": "view == canmv.explorer && canmv.remoteFilesAvailable && (viewItem == file || viewItem == pythonFile || viewItem == directory)",
+					"group": "2_edit@2"
+				},
+				{
+					"command": "canmv.downloadRemoteItem",
+					"when": "view == canmv.explorer && canmv.remoteFilesAvailable && (viewItem == mountRoot || viewItem == directory || viewItem == file || viewItem == pythonFile)",
+					"group": "3_transfer@1"
+				},
+				{
+					"command": "canmv.runExampleFile",
+					"when": "view == canmv.examples && viewItem == localExamplePythonFile && canmv.connected && !canmv.connectionBusy && !canmv.scriptBusy",
+					"group": "inline@1"
+				},
+				{
+					"command": "canmv.openExampleFile",
+					"when": "view == canmv.examples && (viewItem == localExamplePythonFile || viewItem == localExampleTextFile)",
+					"group": "inline@2"
+				},
+				{
+					"command": "canmv.revealExamples",
+					"when": "view == canmv.examples && (viewItem == localExampleFile || viewItem == localExamplePythonFile || viewItem == localExampleTextFile || viewItem == localExampleDirectory)",
+					"group": "navigation@1"
+				}
+			],
+			"canmv.editorMenu": [
+				{
+					"command": "canmv.runOnK230",
+					"when": "canmv.connected && !canmv.connectionBusy && !canmv.scriptBusy",
+					"group": "1_run@1"
+				},
+				{
+					"command": "canmv.saveAsMainPy",
+					"group": "2_save"
+				},
+				{
+					"command": "canmv.saveAsBootPy",
+					"group": "2_save"
+				}
+			],
+			"editor/context": [
+				{
+					"submenu": "canmv.editorMenu",
+					"when": "editorLangId == python && canmv.connected",
+					"group": "1_run"
+				},
+				{
+					"command": "canmv.openThresholdEditor",
+					"when": "editorLangId == python",
+					"group": "2_canmv"
+				}
+			],
+			"editor/title/run": [
+				{
+					"command": "canmv.runCurrentScript",
+					"when": "editorLangId == python && canmv.connected && !canmv.connectionBusy && !canmv.scriptBusy",
+					"group": "navigation@1"
+				},
+				{
+					"command": "canmv.stopScript",
+					"when": "editorLangId == python && canmv.connected && canmv.scriptRunning",
+					"group": "navigation@1"
+				}
+			]
+		},
+		"submenus": [
+			{
+				"id": "canmv.editorMenu",
+				"label": "%canmv.submenu.editorMenu%"
+			}
+		],
+		"configuration": {
+			"title": "%canmv.configuration.title%",
+			"properties": {
+				"canmv.baudRate": {
+					"type": "number",
+					"default": 12000000,
+					"description": "%canmv.configuration.baudRate.description%"
+				},
+				"canmv.autoReconnect": {
+					"type": "boolean",
+					"default": true,
+					"description": "%canmv.configuration.autoReconnect.description%"
+				},
+				"canmv.autoMinifyStartupScripts": {
+					"type": "boolean",
+					"default": true,
+					"description": "%canmv.configuration.autoMinifyStartupScripts.description%"
+				},
+				"canmv.stubsAutoDownload": {
+					"type": "boolean",
+					"default": true,
+					"description": "%canmv.configuration.stubsAutoDownload.description%"
+				},
+				"canmv.mcp.autoConfigureClients": {
+					"type": "boolean",
+					"default": true,
+					"description": "%canmv.configuration.mcp.autoConfigureClients.description%"
+				}
+			}
+		},
+		"mcpServerDefinitionProviders": [
+			{
+				"id": "canmv.mcp",
+				"label": "%canmv.mcp.provider.label%"
+			}
+		]
+	},
+	"scripts": {
+		"vscode:prepublish": "npm run compile",
+		"typecheck": "tsc -p ./ --noEmit",
+		"compile": "npm run typecheck && node ./scripts/build.mjs",
+		"watch": "node ./scripts/build.mjs --watch",
+		"package:vsix": "npm run compile && npx @vscode/vsce package"
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"@types/vscode": "^1.90.0",
+		"esbuild": "^0.25.9",
+		"typescript": "^5.3.0"
+	},
+	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.30.0",
+		"smol-toml": "^1.6.1"
+	},
+	"__metadata": {
+		"installedTimestamp": 1788056549334,
+		"targetPlatform": "undefined",
+		"size": 27139780
+	}
+}

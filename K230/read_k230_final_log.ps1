@@ -9,15 +9,48 @@ try {
     $serial.Open()
     Start-Sleep -Milliseconds 300
     $serial.DiscardInBuffer()
-    $serial.Write("`r`nimport gc;_p='/sdcard/data_touch_results/u_curve.txt';_h=open(_p,'r');_t=_h.read();_h.close();print('K230_FINAL_LOG_BEGIN');print(_t,end='');print('K230_FINAL_LOG_END',len(_t.splitlines()),gc.mem_free())`r`n")
+    $readCode = @'
+import gc
+print('K230_FINAL_LOG_BEGIN')
+_count = 0
+_last_complete = True
+try:
+    _handle = open('/sdcard/data_touch_results/u_curve.txt', 'r')
+except OSError as _error:
+    if _error.args[0] != 2:
+        raise
+    _handle = None
+if _handle is not None:
+    try:
+        while True:
+            _line = _handle.readline(512)
+            if not _line:
+                break
+            print(_line, end='')
+            _last_complete = _line.endswith('\n')
+            if _last_complete:
+                _count += 1
+    finally:
+        _handle.close()
+if not _last_complete:
+    _count += 1
+    print()
+print('K230_FINAL_LOG_END', _count, gc.mem_free())
+'@
+    $readEncoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($readCode))
+    $serial.Write("`r`nexec(__import__('ubinascii').a2b_base64('$readEncoded'))`r`n")
     $deadline = [Environment]::TickCount64 + 10000
     $all = ''
     while ([Environment]::TickCount64 -lt $deadline) {
         Start-Sleep -Milliseconds 50
-        $all += $serial.ReadExisting()
-        if ($all -match 'K230_FINAL_LOG_END') { break }
+        $chunk = $serial.ReadExisting()
+        if ($chunk) {
+            $all += $chunk
+            $deadline = [Environment]::TickCount64 + 10000
+        }
+        if ($all -match 'K230_FINAL_LOG_END \d+ ') { break }
     }
-    if ($all -notmatch 'K230_FINAL_LOG_END') { throw "No final log marker: $all" }
+    if ($all -notmatch 'K230_FINAL_LOG_END \d+ ') { throw "No final log marker: $all" }
     Write-Output $all
 }
 finally {

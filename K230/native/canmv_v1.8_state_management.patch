@@ -1,0 +1,220 @@
+diff --git a/port/core/main.c b/port/core/main.c
+index 156fcce..136c888 100644
+--- a/port/core/main.c
++++ b/port/core/main.c
+@@ -86,6 +86,32 @@
+ #define PATHLIST_SEP_CHAR ':'
+ #define FORCED_EXIT (0x100)
+ 
++// A deliberate DataTouch mode switch leaves a one-shot marker before calling
++// machine.reset(). Consume it here so /sdcard/main.py can run once even while
++// the IDE remains attached. Normal IDE run-script resets do not have this
++// marker and therefore retain the upstream auto-exec suppression semantics.
++static bool datatouch_mode_auto_exec(void)
++{
++    char mode[16] = {0};
++    FILE *file = fopen(SDCARD_MOUNT "/datatouch_mode.txt", "r");
++    if (file == NULL) {
++        return false;
++    }
++    size_t length = fread(mode, 1, sizeof(mode) - 1, file);
++    fclose(file);
++    mode[length] = '\0';
++
++    bool valid_mode = strncmp(mode, "PRODUCTION", 10) == 0 || strncmp(mode, "DEBUG", 5) == 0;
++    const char *reset_flag = SDCARD_MOUNT "/.datatouch_mode_reset";
++    if (!valid_mode || access(reset_flag, F_OK) != 0) {
++        return false;
++    }
++
++    // A stale flag must never turn every future IDE soft reset into auto-exec.
++    unlink(reset_flag);
++    return true;
++}
++
+ // Forward declarations
+ 
+ MP_NOINLINE int main_(int argc, char **argv);
+@@ -464,14 +490,12 @@ soft_reset:
+     mp_hal_set_interrupt_char(-1);
+     ide_dbg_clear_soft_reset_request();
+ 
+-    // Auto-run boot.py/main.py immediately -- never block boot waiting for an IDE
+-    // that may never connect. Only skip auto-exec if the IDE/extension is already
+-    // attached right now (e.g. it stayed connected across a soft reset). If it
+-    // attaches later while a script runs, the attach path soft-resets and
+-    // ide_dbg_auto_exec_allowed() then keeps boot.py/main.py idle until hard reboot.
+-    bool ide_connected = ide_dbg_is_connected();
++    // Auto-run boot.py/main.py regardless of whether an IDE transport is
++    // attached.  Auto-exec is suppressed only after an explicit SCRIPT_STOP
++    // debug takeover; connect/reconnect/heartbeat traffic is observational.
++    bool datatouch_auto_exec = datatouch_mode_auto_exec();
+ 
+-    if (!is_repl_intr && !ide_connected && ide_dbg_auto_exec_allowed()) {
++    if (!is_repl_intr && (datatouch_auto_exec || ide_dbg_auto_exec_allowed())) {
+         FILE*      script_file = NULL;
+         const int* stage_ptr   = NULL;
+         char*      script_str  = NULL;
+@@ -493,7 +517,7 @@ soft_reset:
+ 
+         // Process both boot.py and main/fallback scripts
+         for (size_t i = 0; i < sizeof(scripts_to_run) / sizeof(scripts_to_run[0]); i++) {
+-            if (ide_dbg_is_connected() || ide_dbg_has_script() || 0x00 != access(scripts_to_run[i], F_OK)) {
++            if (ide_dbg_has_script() || 0x00 != access(scripts_to_run[i], F_OK)) {
+                 continue;
+             }
+ 
+diff --git a/port/machine/modmachine.c b/port/machine/modmachine.c
+index aa2416f..2d5e911 100644
+--- a/port/machine/modmachine.c
++++ b/port/machine/modmachine.c
+@@ -48,6 +48,7 @@
+ 
+ #include "drv_tsensor.h"
+ #include "hal_utils.h"
++#include "ide_dbg.h"
+ 
+ #include "modmachine.h"
+ 
+@@ -136,6 +137,11 @@ STATIC mp_obj_t machine_read_temp(void) {
+     return mp_obj_new_float_from_d(temp);
+ }
+ STATIC MP_DEFINE_CONST_FUN_OBJ_0(machine_read_temp_obj, machine_read_temp);
++
++STATIC mp_obj_t machine_ide_connected(void) {
++    return mp_obj_new_bool(ide_dbg_is_connected());
++}
++STATIC MP_DEFINE_CONST_FUN_OBJ_0(machine_ide_connected_obj, machine_ide_connected);
+ //| # Auto-generated CanMV stub docs. Edit the signatures/docstrings here.
+ //| module: machine
+ //| """CanMV machine module."""
+@@ -149,6 +155,8 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_0(machine_read_temp_obj, machine_read_temp);
+ //|     """Reset the board immediately."""
+ //| def temperature() -> float:
+ //|     """Read the chip temperature in degrees Celsius."""
++//| def ide_connected() -> bool:
++//|     """Return whether an IDE protocol session is currently attached."""
+ 
+ 
+ STATIC const mp_rom_map_elem_t machine_module_globals_table[] = {
+@@ -159,6 +167,7 @@ STATIC const mp_rom_map_elem_t machine_module_globals_table[] = {
+     { MP_ROM_QSTR(MP_QSTR_chipid), MP_ROM_PTR(&machine_read_chipid_obj) },
+     { MP_ROM_QSTR(MP_QSTR_mem_copy), MP_ROM_PTR(&machine_mem_copy_obj) },
+     { MP_ROM_QSTR(MP_QSTR_temperature), MP_ROM_PTR(&machine_read_temp_obj) },
++    { MP_ROM_QSTR(MP_QSTR_ide_connected), MP_ROM_PTR(&machine_ide_connected_obj) },
+ 
+ #if MICROPY_PY_MACHINE_DHT
+     { MP_ROM_QSTR(MP_QSTR_dht_readinto), MP_ROM_PTR(&dht_readinto_obj) },
+diff --git a/port/omv/ide_dbg.c b/port/omv/ide_dbg.c
+index 13e2917..e2aca28 100644
+--- a/port/omv/ide_dbg.c
++++ b/port/omv/ide_dbg.c
+@@ -635,9 +635,7 @@ bool ide_dbg_auto_exec_allowed(void) {
+ 
+ static inline void ide_dbg_set_attached(bool attached) {
+     __atomic_store_n(&ide_attached, attached, __ATOMIC_RELEASE);
+-    if (attached) {
+-        ide_dbg_set_auto_exec_suppressed(true);
+-    } else {
++    if (!attached) {
+         ide_dbg_stdout_protocol_detach();
+     }
+ }
+@@ -734,11 +732,18 @@ static void ide_dbg_request_soft_reset(void) {
+     mp_hal_stdin_push(&ctrl_d, 1);
+ }
+ 
+-static void ide_dbg_disconnect_and_soft_reset(void) {
++static void ide_dbg_request_debug_takeover(void) {
++    // Auto-exec is suppressed only by an explicit host request to stop the
++    // current Python program.  Merely attaching the IDE must not change the
++    // application lifecycle.
++    ide_dbg_set_auto_exec_suppressed(true);
++    ide_dbg_request_soft_reset();
++}
++
++static void ide_dbg_disconnect(void) {
+     pr_verb("[usb] IDE disconnected");
+     ide_dbg_set_disconnect(false);
+     ide_dbg_set_attached(false);
+-    ide_dbg_request_soft_reset();
+ }
+ 
+ void ide_dbg_interrupt(void) {
+@@ -977,7 +982,7 @@ static void cmd_tx_input(ide_dbg_state_t* state) {
+                 ide_dbg_repl_script_running());
+ 
+         if (ctrl == IDE_CTRL_D && ide_dbg_is_script_running()) {
+-            ide_dbg_request_soft_reset();
++            ide_dbg_request_debug_takeover();
+             pr_dbg("[ide] USBDBG_TX_INPUT requested soft reset");
+         } else if (ctrl == CHAR_CTRL_C && ide_dbg_repl_script_running()) {
+             wait_mp_irq_handler_done();
+@@ -1007,7 +1012,7 @@ static void cmd_tx_input(ide_dbg_state_t* state) {
+ #endif
+         pr_dbg("[ide] USBDBG_TX_INPUT raised keyboard interrupt");
+     } else if ((uint8_t)input[0] == IDE_CTRL_D && ide_dbg_is_script_running()) {
+-        ide_dbg_request_soft_reset();
++        ide_dbg_request_debug_takeover();
+         pr_dbg("[ide] USBDBG_TX_INPUT requested soft reset");
+     } else {
+         size_t input_len = state->data_length;
+@@ -1784,9 +1789,6 @@ static void ide_dbg_route_protocol_start(ide_dbg_rx_router_t *router, ide_dbg_st
+     router->pending_len = 0;
+     ide_dbg_stdout_protocol_attach();
+     ide_dbg_set_attached(true);
+-    if (ide_dbg_repl_script_running()) {
+-        ide_dbg_request_soft_reset();
+-    }
+     ide_dbg_update(state, frame, frame_len);
+     free(frame);
+ }
+@@ -1959,10 +1961,9 @@ static ide_dbg_status_t ide_dbg_update(ide_dbg_state_t* state, const uint8_t* da
+                         cmd_script_exec(state);
+                         break;
+                     case USBDBG_SCRIPT_STOP: {
+-                        // TODO
+                         pr_verb("cmd: USBDBG_SCRIPT_STOP");
+                         if (ide_dbg_is_script_running()) {
+-                            ide_dbg_request_soft_reset();
++                            ide_dbg_request_debug_takeover();
+                         }
+                         break;
+                     }
+@@ -2029,7 +2030,10 @@ static ide_dbg_status_t ide_dbg_update(ide_dbg_state_t* state, const uint8_t* da
+                         cmd_vtouch_event(state);
+                         break;
+                     case USBDBG_SCRIPT_RUNNING: {
+-                        uint32_t running = ide_dbg_script_running();
++                        // Legacy clients still use 0x87. Report every Python
++                        // execution source, including boot.py/main.py auto-exec,
++                        // so autonomous Production is visible as running.
++                        uint32_t running = ide_dbg_is_script_running() ? 1 : 0;
+                         pr_dbg("cmd: USBDBG_SCRIPT_RUNNING -> %u", running);
+                         mp_hal_uart_tx(&running, sizeof(running));
+                         break;
+@@ -2160,9 +2164,12 @@ static void* ide_dbg_task(void* args) {
+             ide_dbg_route_pending_flush(&router);
+             continue;
+         } else if (result < 0) {
+-            // DTR de-asserted or error
+-            pr_verb("[uart] poll error %d", result);
+-            if (ide_dbg_attach()) {
++            // USB CDC may report a transient poll error while DTR remains
++            // asserted.  Treat only a confirmed DTR drop as disconnect;
++            // otherwise the old path repeatedly soft-reset a live IDE session.
++            int dtr = drv_uart_is_dtr_asserted(inst);
++            pr_verb("[uart] poll error %d, DTR %d", result, dtr);
++            if (dtr == 0 && ide_dbg_attach()) {
+                 static struct timeval tval_last = {};
+                 struct timeval tval;
+                 struct timeval tval_sub;
+@@ -2171,7 +2178,7 @@ static void* ide_dbg_task(void* args) {
+                 if (tval_sub.tv_sec >= 1) {
+                     router.pending_len = 0;
+                     state.state = FRAME_HEAD;
+-                    ide_dbg_disconnect_and_soft_reset();
++                    ide_dbg_disconnect();
+                     tval_last = tval;
+                 }
+             }

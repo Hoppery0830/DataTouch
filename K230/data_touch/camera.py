@@ -18,7 +18,7 @@ class Camera:
         self.sensor = None
         self._started = False
 
-    def initialize(self):
+    def configure(self):
         self.sensor = Sensor(id=CAMERA_ID)
         self.sensor.reset()
         self.sensor.set_framesize(width=CAMERA_WIDTH, height=CAMERA_HEIGHT)
@@ -26,35 +26,52 @@ class Camera:
         if self.sensor.width() != CAMERA_WIDTH or self.sensor.height() != CAMERA_HEIGHT:
             raise RuntimeError("unexpected camera resolution %dx%d" % (
                 self.sensor.width(), self.sensor.height()))
+
+    def start(self):
+        if self.sensor is None:
+            raise RuntimeError("camera is not configured")
         self.sensor.run()
         focus_result = self.sensor.focus_pos(FOCUS_POSITION)
         if focus_result is False:
             raise RuntimeError("unable to set focus position %d" % FOCUS_POSITION)
         self._started = True
 
-    def capture_gray(self):
-        """Capture exactly one frame and return a copied 256x256 float Gray8 ROI."""
+    def initialize(self):
+        """Preserve the accepted production configure -> run -> focus order."""
+        self.configure()
+        self.start()
+
+    def snapshot(self):
         if not self._started:
             raise RuntimeError("camera is not started")
-        frame = gray_roi = gray_256 = raw = None
+        return self.sensor.snapshot()
+
+    def frame_to_gray(self, frame):
+        """Apply the single frozen ROI/resize/Gray8 conversion path."""
+        gray_roi = gray_256 = raw = None
         try:
-            frame = self.sensor.snapshot()
             gray_roi = frame.to_grayscale(roi=CAMERA_ROI)
-            del frame
-            frame = None
             gray_256 = gray_roi.scale(x_size=TARGET_SIZE, y_size=TARGET_SIZE)
-            del gray_roi
             gray_roi = None
             raw = gray_256.to_numpy_ref()
             if int(raw.shape[0]) != TARGET_SIZE or int(raw.shape[1]) != TARGET_SIZE:
                 raise RuntimeError("unexpected Gray8 shape %s" % (raw.shape,))
-            gray = np.array(raw, dtype=np.float) / 255.0
-            return gray
+            return np.array(raw, dtype=np.float) / 255.0
         finally:
-            frame = None
             gray_roi = None
             gray_256 = None
             raw = None
+
+    def capture_gray(self):
+        """Capture exactly one frame and return a copied 256x256 float Gray8 ROI."""
+        if not self._started:
+            raise RuntimeError("camera is not started")
+        frame = None
+        try:
+            frame = self.snapshot()
+            return self.frame_to_gray(frame)
+        finally:
+            frame = None
 
     def stop(self):
         if self._started and self.sensor is not None:

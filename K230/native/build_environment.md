@@ -1,34 +1,39 @@
-# K230 native build environment
+# K230 native firmware source and build
 
-## Frozen target
+The base is official CanMV K230 v1.8, revision `c2d1f5c`, from the
+`canmv_v1.8.xml` manifest. Use board configuration
+`k230_canmv_01studio_defconfig` in the complete K230 build environment.
 
-- Board identity required before deployment: `k230_canmv_01studio with K230`.
-- Firmware lineage: CanMV v1.8, release commit `c2d1f5c`.
-- Source manifest: official `canmv_v1.8.xml`.
-- Board configuration: `k230_canmv_01studio_defconfig`.
+Apply these files to the manifest's `src/canmv` checkout:
 
-## Available and verified components
+| Published file | Destination within `src/canmv` |
+| --- | --- |
+| `modgunay_native.c` | `port/modules/modgunay_native.c` |
+| `canmv_port/port/core/main.c` | `port/core/main.c` |
+| `canmv_port/port/machine/modmachine.c` | `port/machine/modmachine.c` |
+| `canmv_port/port/omv/ide_dbg.c` | `port/omv/ide_dbg.c` |
 
-- WSL2 Ubuntu 22.04, Linux 6.6.87.2.
-- Official CanMV v1.8 manifest and synchronized source tree at `/home/zhm/k230_native_build`.
-- Official K230 RT-Smart and Linux RISC-V toolchains installed by `make dl_toolchain`.
-- GNU make, GCC/G++, CMake, Git, repo, SCons 3.1.2, and the documented Python build dependencies.
-- Native source installed at `src/canmv/port/modules/modgunay_native.c`; the v1.8 Makefile collects it through `modules/*.c`.
-- Successful `make canmv` build for the frozen 01Studio configuration.
-- Linked executable size: 15,799,816 bytes; linked binary contains the `gunay_native` module registration string.
-- Deployable artifact: `analysis/k230_native_region_stats/build/micropython_canmv_v1.8_01studio_gunay_native`.
+The three port replacements are also available as
+`canmv_v1.8_state_management.patch`, generated against the unmodified release
+revision. Use the patch or the port replacements, then install the native
+module. The normal v1.8 build collects `port/modules/*.c` automatically.
 
-The build root is on WSL ext4 so compilation does not create high-frequency intermediate writes in the project directory. Only the final executable is retained in the project.
+From the complete manifest build root, configure the 01Studio board using the
+upstream build procedure, install its RISC-V toolchains, and run `make canmv`.
+Linux/WSL ext4 is the preferred build location for intermediate files.
 
-## Flash and board execution
+The port changes expose `machine.ide_connected()`, keep IDE attachment and
+disconnect observational, make explicit script stop take over the runtime,
+and consume `/sdcard/.datatouch_mode_reset` for deliberate mode changes.
+They are required by the current Python application.
 
-- COM14 positive identity was reconfirmed as CanMV v1.8 on `k230_canmv_01studio with K230` before preparing the image.
-- The CanMV executable is a fast-boot RT-App stored in the hidden `rtapp_a` and `rtapp_b` image partitions; it is not a replaceable file in the mounted `/sdcard` data partition.
-- Full official image: `analysis/k230_native_region_stats/build/CanMV_v1.8_01Studio_gunay_native_full.img.gz`.
-- Image size: 20,793,876 bytes; gzip integrity passed; MD5 is recorded beside the image.
-- The image's SDCARD partition contains `texture_structure_tensor_v1`, the native runner, and all 15 frozen test images.
+Before application deployment, verify board identity
+`k230_canmv_01studio with K230`, successful `import gunay_native`,
+`gunay_native.region_stats_fused_span_query`, and `machine.ide_connected()`.
+CanMV is an RT-App in the image's boot partitions; Python uploads to
+`/sdcard` do not install the native firmware.
 
-- Windows WinUSB was installed only for the K230 boot device `VID_29F1&PID_0230`; the official CLI then identified exactly one BROM device.
-- The uncompressed 650,117,120-byte image was written to SDCARD to 100%, and the CLI reported flash completion.
-- After a normal power cycle, COM14 identified the flashed target as `k230_canmv_01studio with K230`; importing the built-in `gunay_native` module passed.
-- The golden-image native run completed on the physical board. Build and execution environment are therefore unblocked.
+This repository contains source and rebuild instructions. Firmware images,
+toolchain downloads, compiler output, board logs and calibration images are
+not included. Publication checks cover Python regressions, script syntax and
+the STM32F1 build. Full CanMV image build and board acceptance are separate.
