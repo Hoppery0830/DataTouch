@@ -80,6 +80,16 @@ exports.main = async (event, context) => {
     return fail(4002, "deviceId 过长（最多 " + DEVICE_ID_MAX_LEN + " 个字符）");
   }
 
+  if (ev.action === "telemetry") {
+    try {
+      const got = await db.collection("device_telemetry").where({deviceId}).limit(1).get();
+      const telemetry = got.data && got.data[0];
+      if (!telemetry) return {ok:true,telemetry:null,serverTime:Date.now()};
+      const age = Date.now()-new Date(telemetry.sampleAt).getTime();
+      telemetry.fresh = Number.isFinite(age) && age>=0 && age<15000;
+      return {ok:true,telemetry,serverTime:Date.now()};
+    } catch(e) {return fail(5000,"读取 device_telemetry 失败，请确认集合已建立："+(e.message||e.errMsg));}
+  }
   // Read authoritative live state through the existing cloud entry point.
   if (ev.action === "status") {
     try {

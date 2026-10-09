@@ -1,3 +1,4 @@
+#include "telemetry.h"
 // ============================================================
 //  cloud_command.cpp — 云端远程命令（HTTPS 轮询 → ESP32 → STM32）实现
 //  ------------------------------------------------------------
@@ -402,7 +403,7 @@ static String buildPollBody(const CloudConfig &cfg) {
   b+=jsonEsc(cfg.token.c_str());b+="\",\"deviceId\":\"";b+=jsonEsc(cfg.deviceId.c_str());
   char snapshot[180];
   snprintf(snapshot,sizeof(snapshot),"\",\"status\":{\"alive\":%s,\"state\":%u,\"mode\":%u,\"stage\":%u,\"online\":%u,\"fault\":%u}}",alive?"true":"false",status.state,status.mode,status.stage,status.online,status.fault);
-  b+=snapshot;return b;
+  b+=snapshot;b.remove(b.length()-1);b+=",\"telemetry\":";b+=telemetryJson();b+="}";return b;
 }
 
 static String buildAckBody(const CloudConfig &cfg, const char *id, const char *result) {
@@ -548,6 +549,8 @@ static void doPollOnce() {
     return;
   }
 
+  String telemetryError=jsonScalar(r.resp,"telemetryError");
+  if(telemetryError.length())Serial.printf("[TELEMETRY] %s\n",telemetryError.c_str());
   s_cntPollOk++;
   s_statDirty = true;
   if (s_failCount > 0) {                                 // 从失败恢复：打一行，便于现场判断

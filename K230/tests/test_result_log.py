@@ -267,6 +267,7 @@ class ResultLogTests(unittest.TestCase):
     def debug_namespace(self):
         owner = self
         owner.shutdown_count = 0
+        owner.sent_scores = []
 
         class Frame:
             def save(self, path, **kwargs):
@@ -275,7 +276,7 @@ class ResultLogTests(unittest.TestCase):
         class Session:
             def __init__(self, **kwargs):
                 self.camera = SimpleNamespace(snapshot=Frame, frame_to_gray=lambda frame: object())
-                self.stm32 = SimpleNamespace(light_on=lambda: True)
+                self.stm32 = SimpleNamespace(light_on=lambda: True, send_u_curve=lambda value: (owner.sent_scores.append(value) or True))
             def initialize(self):
                 pass
             def show(self, frame):
@@ -310,7 +311,29 @@ class ResultLogTests(unittest.TestCase):
         self.assertEqual(Path(row["image_path"]).name, "measure_2.jpg")
         self.assertTrue(Path(row["image_path"]).exists())
         self.assertEqual(row["line"], "2,0.500000")
+        self.assertTrue(row["uart_ack"])
+        self.assertEqual(self.sent_scores, [0.5])
         self.assertEqual(self.shutdown_count, 1)
+
+    def test_debug_uart_failure_preserves_photo_and_numbered_log(self):
+        for outcome in (False, OSError("UART failed")):
+            namespace = self.debug_namespace()
+            original = namespace["DebugSession"]
+            def session(**kwargs):
+                obj = original(**kwargs)
+                def send(value):
+                    if isinstance(outcome, Exception):
+                        raise outcome
+                    return outcome
+                obj.stm32.send_u_curve = send
+                return obj
+            namespace["DebugSession"] = session
+            before = result_log.line_count()
+            row = namespace["capture_evaluate_save"]()
+            self.assertFalse(row["uart_ack"])
+            self.assertTrue(Path(row["image_path"]).exists())
+            self.assertEqual(result_log.line_count(), before + 1)
+            self.assertEqual(self.shutdown_count, 1)
 
     def test_debug_log_failure_removes_promoted_photo(self):
         namespace = self.debug_namespace()
@@ -319,6 +342,7 @@ class ResultLogTests(unittest.TestCase):
             namespace["capture_evaluate_save"]()
         self.assertEqual(list(Path(namespace["DEBUG_CAPTURE_DIRECTORY"]).iterdir()), [])
         self.assertEqual(result_log.line_count(), 0)
+        self.assertEqual(self.sent_scores, [])
         self.assertEqual(self.shutdown_count, 1)
 
     def test_debug_evaluation_failure_removes_pending_photo(self):

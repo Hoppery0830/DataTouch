@@ -100,3 +100,17 @@ If LIGHT_ON is not acknowledged after three attempts, K230 attempts LIGHT_OFF,
 cancels that measurement, and does not capture or append a result. If the
 LIGHT_OFF ACK is missing after capture, K230 reports a warning but retains and
 processes the already captured image.
+
+## F407 integration
+
+The F407 firmware now handles this protocol on USART1: PA9 TX to K230 GPIO12 RX,
+PA10 RX from K230 GPIO11 TX, common ground, 115200 8N1. `TOUCH_USART1_K230=1`
+is the default CMake option; zero restores the PC F/A/S stream instead.
+ACK status 1 indicates an invalid command/value; status 2 indicates that the
+lamp driver GPIO has not been configured. The existing K230 code accepts only
+status 0, so an unconfigured lamp cancels acquisition rather than reporting
+false success. Configure the actual lamp GPIO/polarity before the automatic
+illumination/capture workflow. F407 forces the lamp off after 8 seconds if OFF
+is lost. U_curve is forwarded with its F407 reception timestamp and result
+sequence through ESP32 to the mini program. It is a discrete result, not an
+online heartbeat. See ../docs/触觉遥测与K230联调.md.

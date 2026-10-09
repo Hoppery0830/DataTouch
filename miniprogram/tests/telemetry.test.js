@@ -1,0 +1,22 @@
+const assert=require('assert');
+const {validate,merge}=require('../cloudfunctions/deviceCommand/telemetry');
+const {GROUPS,series,value}=require('../miniprogram/utils/telemetry');
+const row=(seq,ms=seq*100,flags=127)=>[seq,ms,flags,0,1,100,...Array.from({length:22},(_,i)=>i/10)];
+const packet=rows=>({version:1,session:'1234abcd-0',ageMs:100,samples:rows});
+assert(validate(packet([row(1),row(2)])));
+assert.equal(validate(packet([row(2),row(1)])),null);
+assert.equal(validate(packet([row(1).slice(1)])),null);
+let bad=row(1);bad[7]=NaN;assert.equal(validate(packet([bad])),null);
+assert.equal(validate({...packet([row(1)]),session:'bad/path'}),null);
+assert.equal(validate(packet(Array.from({length:61},(_,i)=>row(i)))),null);
+let now=new Date(100000),old=merge(null,packet([row(1)]),'dev',now);
+let duplicate=merge(old,packet([row(1)]),'dev',new Date(120000));assert.equal(+old.sampleAt,+duplicate.sampleAt);
+old={...old,samples:Array.from({length:600},(_,i)=>row(i))};
+let next=merge(old,packet([row(599),row(600)]),'dev',now);assert.equal(next.samples.length,600);assert.equal(next.samples[0][0],1);
+next=merge(old,{...packet([row(1)]),session:'1234abcd-1'},'dev',now);assert.equal(next.samples.length,1);
+assert.equal(value(row(1,100,0),0,1),null);
+let points=series([row(1),row(2),row(4),row(5,500,0)],GROUPS[0])[0].points;
+assert(!points[1].break);assert(points[2].break);assert.equal(points[3].y,null);
+points=series([row(1),row(2),row(3)],GROUPS[8])[0].points;assert.equal(points.length,1);assert.equal(points[0].y,1.4);
+assert.equal(series([row(1000)],GROUPS[8])[0].points.length,0); // old K230 result is not redrawn as new
+console.log('PASS telemetry: schema, finite values, bounded batches/history, dedup, stale retries, sessions, gaps, K230 timestamps');

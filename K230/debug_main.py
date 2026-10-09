@@ -266,6 +266,17 @@ def capture_evaluate_save():
         line = append_u_curve(value, expected_index=index)
         measurement_complete = True
         after_lines = index
+        # Forward only after both photo and numbered log have been committed.
+        # UART failure does not undo the durable measurement.
+        try:
+            uart_ack = session.stm32.send_u_curve(value)
+        except Exception as error:
+            if "IDE interrupt" in str(error):
+                raise
+            uart_ack = False
+            print("K230_DEBUG_WARNING U_CURVE_SEND_ERROR saved_index=%d error=%s" % (index, error))
+        if not uart_ack:
+            print("K230_DEBUG_WARNING U_CURVE_ACK_FAILED saved_index=%d" % index)
         row = {
             "index": index,
             "U_curve": value,
@@ -278,6 +289,7 @@ def capture_evaluate_save():
             "txt_lines_before": before_lines,
             "txt_lines_after": after_lines,
             "line": line,
+            "uart_ack": uart_ack,
         }
         print("K230_DEBUG_MEASUREMENT PASS U_curve=%.12g runtime_ms=%d algorithm_ms=%d min_heap=%d image=%s lines=%d" % (
             row["U_curve"], row["runtime_ms"], row["algorithm_ms"],

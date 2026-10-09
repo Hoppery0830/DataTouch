@@ -30,3 +30,5 @@ python -B -m unittest discover -s K230/tests -v
 ```
 
 更新开发板时需上传本次修改的 `main.py`、`mode_config.py`、`debug_main.py`、`data_touch/app.py` 和 `data_touch/result_log.py`，然后重启以清除旧模块缓存。旧格式日志会在新程序首次初始化测评日志时转换。
+
+生产测评与调试 `capture_evaluate_save()` 均在保存成功后向F4发送U_curve；发送失败保留日志和照片，返回 `uart_ack=False`。当前UART负载仍只有float32评分，不包含SD测评编号或照片；手机上的F4接收序号不等于SD编号。

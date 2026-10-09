@@ -1,5 +1,6 @@
 <!--pages/control/control.wxml  远程控制（选择运动模式 + 下发 4 个安全命令 + 查看最近命令状态）-->
 <view class="page">
+  <button bindtap="openTelemetry">查看力学与纹理曲线</button>
   <!-- 顶部说明条：明确当前操作对象、云环境，以及当前选中的运动模式 -->
   <view class="head">
     <view class="head-title">远程控制</view>
