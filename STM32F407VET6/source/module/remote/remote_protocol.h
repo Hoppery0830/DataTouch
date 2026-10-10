@@ -9,7 +9,7 @@
 #define RC_REPLY 0x11
 #define RC_STATUS 0x12
 #define RC_HEARTBEAT 0x13
-#define RC_MAX_PAYLOAD 128
+#define RC_MAX_PAYLOAD 24
 /* 请求 payload: seq:u32, op:u8, mode:u8；回复: seq:u32,result:u8。
  * 状态: state,mode,stage,online_mask,fault_mask (5 bytes)。 */
 enum

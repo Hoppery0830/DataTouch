@@ -1,6 +1,6 @@
 // In-memory SDK harness: exercises actual cloud handlers without cloud access.
 const fs=require('fs'),vm=require('vm'),path=require('path'),assert=require('assert');
-const root=path.resolve(__dirname,'..');let store={commands:[],device_status:[],device_telemetry:[]},next=0,failStatus=false;
+const root=path.resolve(__dirname,'..');let store={commands:[],device_status:[]},next=0,failStatus=false;
 const ops={};for(const op of ['lt','lte','gte','in'])ops[op]=value=>({op,value});
 function matches(doc,filter){return Object.entries(filter).every(([k,v])=>{
  if(v&&v.op){const x=doc[k];switch(v.op){case 'lt':return x<v.value;case 'lte':return x<=v.value;case 'gte':return x>=v.value;case 'in':return v.value.includes(x);}}
@@ -16,7 +16,7 @@ function query(name,filter={}){let order='',direction=1,max=Infinity;
 }
 const db={command:ops,collection:query,serverDate:()=>new Date()};
 const cloud={init(){},DYNAMIC_CURRENT_ENV:'test',database:()=>db,getWXContext:()=>({OPENID:'test-user'})};
-function handler(name){const module={exports:{}};const context={exports:module.exports,require:n=>{if(n==='./telemetry.js')return require('../cloudfunctions/deviceCommand/telemetry.js');assert.equal(n,'wx-server-sdk');return cloud;},console:{log(){},warn(){},error(){}},Date};
+function handler(name){const module={exports:{}};const context={exports:module.exports,require:n=>{assert.equal(n,'wx-server-sdk');return cloud;},console:{log(){},warn(){},error(){}},Date};
  vm.runInNewContext(fs.readFileSync(path.join(root,'cloudfunctions',name,'index.js'),'utf8'),context);return context.exports.main;}
 const send=handler('sendCommand'),device=handler('deviceCommand');
 const poll=(extra={})=>device({action:'poll',token:'REPLACE_ME',deviceId:'dev',...extra});
@@ -43,15 +43,5 @@ const ack=(id,result,deviceId='dev')=>device({action:'ack',token:'REPLACE_ME',de
  p=await poll();assert.equal(p.commands.length,0);
  store.commands.push({_id:'old',deviceId:'dev',cmd:'start',state:'sent',sentAt:new Date(Date.now()-210000)});
  await poll();assert.equal(store.commands.find(x=>x._id==='old').state,'unknown');
- const row=[1,100,3,0,0,0,...Array(22).fill(0)];
- const telemetry={version:1,session:'aabbccdd-0',ageMs:0,samples:[row]};
- await poll({telemetry});let tele=await send({deviceId:'dev',action:'telemetry'});
- assert(tele.ok&&tele.telemetry.fresh);assert.equal(tele.telemetry.samples.length,1);
- await poll({telemetry});assert.equal(store.device_telemetry[0].samples.length,1);
- store.device_telemetry[0].sampleAt=new Date(Date.now()-16000);
- await poll({telemetry});tele=await send({deviceId:'dev',action:'telemetry'});assert(!tele.telemetry.fresh);
- assert.equal((await send({deviceId:'other',action:'telemetry'})).telemetry,null);
- await send({deviceId:'dev',cmd:'stop'});failStatus=true;p=await poll({telemetry});failStatus=false;
- assert.equal(p.commands[0].cmd,'stop');assert(p.telemetryError);
  console.log('PASS cloud: validation, max batch=4, claims, STOP priority/cancel, accepted/final monotonic receipts, device isolation, live/stale status, status failure, no START replay');
 })().catch(e=>{console.error(e);process.exitCode=1;});

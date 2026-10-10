@@ -6,7 +6,6 @@
 #include "queue.h"
 #include "cmsis_os2.h"
 #include "main.h"
-#include "touch_task.h"
 static QueueHandle_t requests, urgent, replies;
 static StaticQueue_t req_cb, urgent_cb, reply_cb;
 static uint8_t req_mem[8 * sizeof(remote_request_t)], urgent_mem[4 * sizeof(remote_request_t)],
@@ -33,7 +32,7 @@ static void run(void *argument)
     if (!ESP_UART_Start())
         Error_Handler();
     remote_parser_t parser = {0};
-    uint32_t last_status = 0, last_telemetry = 0;
+    uint32_t last_status = 0;
     remote_reply_t reply;
     bool pending = false;
     for (;;)
@@ -72,7 +71,7 @@ static void run(void *argument)
                         RemoteTask_Reply((remote_reply_t){q.seq, RC_BUSY});
                 }
             }
-        uint8_t frame[133], payload[TOUCH_TELEMETRY_SIZE];
+        uint8_t frame[32], payload[5];
         if (!pending)
             pending = xQueueReceive(replies, &reply, 0) == pdPASS;
         if (pending)
@@ -95,14 +94,6 @@ static void run(void *argument)
             size_t n = RC_Build(frame, RC_STATUS, payload, 5);
             if (ESP_UART_Send(frame, n))
                 last_status = now;
-        }
-        else {
-            touch_telemetry_t t; TouchTask_GetTelemetry(&t);
-            if (t.seq && t.seq != last_telemetry) {
-                TouchTelemetry_Encode(&t, payload);
-                size_t n = RC_Build(frame, TOUCH_TELEMETRY_TYPE, payload, TOUCH_TELEMETRY_SIZE);
-                if (ESP_UART_Send(frame, n)) last_telemetry = t.seq;
-            }
         }
         osDelay(2);
     }

@@ -38,7 +38,6 @@ bool Axis_Move(motor_t *m, axis_id_t id, float pos, float speed, uint32_t now)
         return false;
     return Motor_Move(m, rev, rpm, g_axis_config[id].acceleration, pulses, now);
 }
-
 /** @brief 同时检查健康、无未完成控制事务、两类反馈严格晚于 sent、到位标志与位置容差。
  * sent/now 均为毫秒；不能用下发前的旧位置或 ACK 代替运动完成。 */
 bool Axis_AtTarget(const motor_t *m, axis_id_t id, float target, uint32_t sent, uint32_t now)

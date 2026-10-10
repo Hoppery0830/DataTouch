@@ -1,4 +1,3 @@
-const telemetryCodec = require("./telemetry.js");
 // cloudfunctions/deviceCommand/index.js
 // ============================================================
 // deviceCommand —— 设备侧「远程控制命令」拉取 / 确认入口
@@ -221,19 +220,6 @@ exports.main = async (event, context) => {
           stage: st.stage, online: st.online, fault: st.fault, updatedAt: now
         }}); } catch(e) { console.warn("device_status 写入失败（命令通道继续）：", e.message); }
       }
-      // Telemetry failure never blocks STOP/RESET or command receipts.
-      let telemetryError = "";
-      if (payload.telemetry && /^[A-Za-z0-9_-]{1,64}$/.test(deviceId)) {
-        const packet = telemetryCodec.validate(payload.telemetry);
-        if (!packet) telemetryError = "invalid telemetry";
-        else try {
-          const collection = db.collection("device_telemetry");
-          const got = await collection.where({deviceId}).limit(1).get();
-          const data = telemetryCodec.merge(got.data && got.data[0], packet, deviceId, now);
-          await collection.doc(deviceId).set({data});
-        } catch(e) { telemetryError = e.message || "device_telemetry write failed"; }
-        if (telemetryError) console.warn("[telemetry]",telemetryError);
-      }
       // Missing final receipt is an unknown outcome, never a reason to replay START.
       await db.collection(COLLECTION).where({deviceId, state: _.in(["sent","accepted"]),
         sentAt: _.lt(new Date(now.getTime()-200000))}).update({data:{state:"unknown",result:"timeout",doneAt:now}});
@@ -317,7 +303,6 @@ exports.main = async (event, context) => {
       return {
         ok: true,
         commands,
-        telemetryError,
         serverTime: Date.now(),   // 毫秒时间戳，便于设备校准/判断延迟
         insecure,
       };

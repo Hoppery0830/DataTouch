@@ -113,6 +113,5 @@ Page({
   }).catch(e=>{if(this._visible&&seq===this._sendSeq)wx.showToast({title:e.message||e.errMsg||"下发失败",icon:"none"});})
   .then(()=>{clearTimeout(timer);if(seq===this._sendSeq)this.setData({sendingCmd:""});});
  },
- openTelemetry(){wx.navigateTo({url:"/pages/telemetry/telemetry?deviceId="+encodeURIComponent(this.data.deviceId)});},
  onRetry(){this.refresh();}
 });

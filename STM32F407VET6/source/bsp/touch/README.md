@@ -1,5 +1,3 @@
-> 新增：USART1 默认由 K230 使用；PC F/A/S 输出须选择 `TOUCH_USART1_K230=0`。遥测与2秒特征计算见仓库 `docs/触觉遥测与K230联调.md`。
-
 # 触觉 BSP
 
 PC0 接地仍读4095时，可展开 `g_touch_adc_debug` 检查实际寄存器快照。

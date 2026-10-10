@@ -1,5 +1,3 @@
-> 新增：USART1 默认由 K230 使用；PC F/A/S 输出须选择 `TOUCH_USART1_K230=0`。遥测与2秒特征计算见仓库 `docs/触觉遥测与K230联调.md`。
-
 # 触觉协议与计算
 
 `touch_processing.c/.h` 不依赖 HAL/FreeRTOS，协议对象由 TouchTask 独占，可以在电脑端 GCC 测试。

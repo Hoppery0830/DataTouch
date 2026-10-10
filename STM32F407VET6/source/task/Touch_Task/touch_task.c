@@ -5,22 +5,13 @@
 #include "cmsis_os2.h"
 #include <stdio.h>
 #include <string.h>
-#include "k230_link.h"
-#if TOUCH_USART1_K230
-static k230_link_t k230;
-#endif
 
 static StaticTask_t task_cb;
 static StackType_t task_stack[1024];
 volatile touch_status_t g_touch_status;
 static touch_status_t current;
 static touch_parser_t parser;
-static touch_features_t features;
-static touch_telemetry_t telemetry;
-void TouchTask_GetTelemetry(touch_telemetry_t *out){taskENTER_CRITICAL();*out=telemetry;taskEXIT_CRITICAL();}
-#if !TOUCH_USART1_K230
 static uint32_t sent_force, sent_adc, last_output, last_status;
-#endif
 
 void TouchTask_GetStatus(touch_status_t *out)
 {
@@ -28,7 +19,6 @@ void TouchTask_GetStatus(touch_status_t *out)
     taskENTER_CRITICAL(); *out = g_touch_status; taskEXIT_CRITICAL();
 }
 /* F/A/S 的字段、单位兼容用户原 Python 上位机。输出只取最新值，不回放积压数据。 */
-#if !TOUCH_USART1_K230
 static void output_pc(uint32_t now)
 {
     if (now - last_output < TOUCH_OUTPUT_MS) return;
@@ -77,13 +67,11 @@ static void output_pc(uint32_t now)
         if (status) last_status = now;
     }
 }
-#endif
 static void run(void *argument)
 {
     (void)argument;
     if (!Touch_BSP_Start()) Error_Handler();
     uint32_t start = HAL_GetTick(), last_poll = start;
-    features.output_ms=features.window_ms=start;
     touch_adc_block_t block;
     for (;;) {
         uint32_t now = HAL_GetTick();
@@ -91,27 +79,14 @@ static void run(void *argument)
             parser.used = 0;
             parser.latest.valid = false;
         }
-#if TOUCH_USART1_K230
-        K230_Tick(&k230,now,Touch_BSP_Light);
-        uint8_t kb;
-        for(unsigned budget=0;budget<64;budget++){
-            if(k230.pending){
-                if(Touch_BSP_SendPC((const char *)k230.ack,sizeof(k230.ack)))k230.pending=false;
-                else break;
-            }
-            if(!Touch_BSP_ReadK230(&kb))break;
-            K230_Feed(&k230,kb,now,Touch_BSP_Light);
-        }
-#endif
         uint8_t byte;
         /* 有界工作量，不让坏帧/连续发送占满 CPU；每毫秒可消费512字节。 */
         for (unsigned i = 0; i < 512 && Touch_BSP_ReadByte(&byte); i++)
-            if (Touch_Parse(&parser, byte, now)) TouchFeatures_Force(&features, &parser.latest);
+            (void)Touch_Parse(&parser, byte, now);
         for (unsigned i = 0; i < 4 && Touch_BSP_ReadBlock(&block); i++) {
             if (Touch_ProcessADC(block.samples, TOUCH_BLOCK_FRAMES, &current.adxl)) {
                 current.adc_timestamp_ms = block.timestamp_ms;
                 current.adc_blocks = block.sequence;
-                TouchFeatures_ADC(&features, &current.adxl, block.timestamp_ms);
             }
         }
         now = HAL_GetTick(); /* DMA 回调可能在本轮处理期间发布更晚的块时间戳。 */
@@ -127,17 +102,7 @@ static void run(void *argument)
             if (Touch_BSP_RequestForce()) last_poll = now;
         }
         taskENTER_CRITICAL(); g_touch_status = current; taskEXIT_CRITICAL();
-        touch_telemetry_t sample;
-        if (TouchFeatures_Tick(&features, now, &sample)) {
-#if TOUCH_USART1_K230
-            sample.light=k230.light;sample.k_seq=k230.result_seq;sample.k_ms=k230.result_ms;
-            if(k230.valid){sample.flags|=16;sample.v[14]=k230.u_curve;}
-#endif
-            taskENTER_CRITICAL(); telemetry = sample; taskEXIT_CRITICAL();
-        }
-#if !TOUCH_USART1_K230
         output_pc(now);
-#endif
         osDelay(1);
     }
 }
