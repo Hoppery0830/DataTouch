@@ -26,7 +26,7 @@
 #ifndef APP_MOTOR_SELFTEST
 #define APP_MOTOR_SELFTEST 0
 #endif
-#define APP_SELFTEST_AXIS MOTOR_X
+#define APP_SELFTEST_AXIS MOTOR_Z
 #define APP_SELFTEST_TARGET 2.0f /* X/Z in mm, Yaw in degrees; 0.5mm is hard to see */
 #define APP_SELFTEST_SPEED 1.0f  /* X/Z in mm/s, Yaw in deg/s; start slow */
 
