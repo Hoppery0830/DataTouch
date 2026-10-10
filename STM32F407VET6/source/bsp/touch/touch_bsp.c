@@ -19,6 +19,36 @@ static volatile touch_bsp_stats_t stats;
 volatile touch_io_debug_t g_touch_io_debug;
 volatile touch_adc_debug_t g_touch_adc_debug;
 static uint8_t pc_tx[384];
+#if TOUCH_USART1_K230
+static uint8_t k_rx, k_ring[128];
+static volatile uint32_t k_head, k_tail;
+#endif
+uint8_t Touch_BSP_Light(bool on){
+#if TOUCH_LIGHT_CONFIGURED
+    HAL_GPIO_WritePin(TOUCH_LIGHT_PORT, TOUCH_LIGHT_PIN, on ? TOUCH_LIGHT_ACTIVE : (TOUCH_LIGHT_ACTIVE==GPIO_PIN_SET?GPIO_PIN_RESET:GPIO_PIN_SET));
+    return 0;
+#else
+    (void)on; return 2;
+#endif
+}
+void Touch_UART_RxComplete(UART_HandleTypeDef *h){
+#if TOUCH_USART1_K230
+    if(h!=&huart1 || pc_broken)return;
+    if(k_head-k_tail>=sizeof(k_ring)){pc_broken=true;stats.ring_overflows++;return;}
+    k_ring[k_head%sizeof(k_ring)]=k_rx;__DMB();k_head++;
+    if(HAL_UART_Receive_IT(h,&k_rx,1)!=HAL_OK)pc_broken=true;
+#else
+    (void)h;
+#endif
+}
+bool Touch_BSP_ReadK230(uint8_t *b){
+#if TOUCH_USART1_K230
+    if(pc_broken || k_head==k_tail)return false;
+    __DMB();*b=k_ring[k_tail%sizeof(k_ring)];__DMB();k_tail++;return true;
+#else
+    (void)b;return false;
+#endif
+}
 /* 静态发送缓冲，HAL_UART_Transmit_IT 返回后仍有效；自动换向 RS485 模块。 */
 static uint8_t request_all[] = {1, 3, 0, 3, 0, 12, 0xb5, 0xcf};
 
@@ -105,6 +135,16 @@ bool Touch_BSP_Start(void)
     irq(DMA2_Stream0_IRQn); irq(ADC_IRQn);
     irq(DMA2_Stream7_IRQn); irq(USART1_IRQn);
     if (HAL_UARTEx_ReceiveToIdle_DMA(&huart4, rx_dma, sizeof(rx_dma)) != HAL_OK) return false;
+#if TOUCH_USART1_K230
+    if(HAL_UART_Receive_IT(&huart1,&k_rx,1)!=HAL_OK)return false;
+#if TOUCH_LIGHT_CONFIGURED
+    TOUCH_LIGHT_CLOCK_ENABLE();
+    Touch_BSP_Light(false);
+    GPIO_InitTypeDef light_gpio={0};light_gpio.Pin=TOUCH_LIGHT_PIN;
+    light_gpio.Mode=GPIO_MODE_OUTPUT_PP;light_gpio.Pull=GPIO_NOPULL;light_gpio.Speed=GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(TOUCH_LIGHT_PORT,&light_gpio);
+#endif
+#endif
     return start_adc();
 }
 void Touch_UART_RxEvent(UART_HandleTypeDef *h)
@@ -228,6 +268,10 @@ bool Touch_BSP_Recover(uint32_t now)
     }
     if (pc_broken && HAL_UART_Abort(&huart1) == HAL_OK) {
         pc_busy = false; pc_broken = false;
+#if TOUCH_USART1_K230
+        k_head=k_tail=0;
+        if(HAL_UART_Receive_IT(&huart1,&k_rx,1)!=HAL_OK)pc_broken=true;
+#endif
     }
     return reset_parser;
 }

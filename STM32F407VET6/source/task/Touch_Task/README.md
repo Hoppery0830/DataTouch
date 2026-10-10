@@ -1,3 +1,5 @@
+> 新增：USART1 默认由 K230 使用；PC F/A/S 输出须选择 `TOUCH_USART1_K230=0`。遥测与2秒特征计算见仓库 `docs/触觉遥测与K230联调.md`。
+
 # TouchTask
 
 `App_RTOS_Objects_Init()` 调用 `TouchTask_Init()`，使用静态 TCB 和 1024 Words 栈创建唯一任务，优先级 Normal1；低于 MotorTask 的 AboveNormal1，高于 RemoteTask 的 Normal。无需 CubeMX 新增任务。

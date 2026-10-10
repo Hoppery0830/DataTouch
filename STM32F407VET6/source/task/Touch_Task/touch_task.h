@@ -15,3 +15,6 @@ typedef struct {
 extern volatile touch_status_t g_touch_status;
 void TouchTask_Init(void);
 void TouchTask_GetStatus(touch_status_t *out);
+
+#include "touch_telemetry.h"
+void TouchTask_GetTelemetry(touch_telemetry_t *out);

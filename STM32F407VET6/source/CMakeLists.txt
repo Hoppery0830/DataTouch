@@ -1,4 +1,6 @@
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/module/touch/k230_link.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/module/touch/touch_telemetry.c
     ${CMAKE_CURRENT_SOURCE_DIR}/module/touch/touch_processing.c
     ${CMAKE_CURRENT_SOURCE_DIR}/bsp/touch/touch_bsp.c
     ${CMAKE_CURRENT_SOURCE_DIR}/task/Touch_Task/touch_task.c

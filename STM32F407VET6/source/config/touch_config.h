@@ -19,3 +19,18 @@
 #define TOUCH_ZERO_FX_N       (-28.049325f)
 #define TOUCH_ZERO_FY_N       (-16.380930f)
 #define TOUCH_ZERO_FZ_N       (-3.449119f)
+
+/* USART1 ownership: 1=K230 115200, 0=PC F/A/S text. Never both. */
+#ifndef TOUCH_USART1_K230
+#define TOUCH_USART1_K230 1
+#endif
+
+/* Set to 1 ONLY after configuring the actual lamp driver pin/polarity below. */
+#ifndef TOUCH_LIGHT_CONFIGURED
+#define TOUCH_LIGHT_CONFIGURED 0
+#endif
+#if TOUCH_LIGHT_CONFIGURED
+#ifndef TOUCH_LIGHT_PORT
+#error "Define TOUCH_LIGHT_PORT, TOUCH_LIGHT_PIN, TOUCH_LIGHT_ACTIVE and TOUCH_LIGHT_CLOCK_ENABLE()"
+#endif
+#endif
