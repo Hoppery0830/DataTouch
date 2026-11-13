@@ -1,0 +1,57 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "DAP: Configure Debug",
+      "type": "process",
+      "command": "D:/RM/toolchains/Toolchains_download/Toolchains_download/cmake-4.0.1-windows-x86_64/bin/cmake.exe",
+      "args": [
+        "--preset",
+        "Debug"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "DAP: Build Debug",
+      "type": "process",
+      "command": "D:/RM/toolchains/Toolchains_download/Toolchains_download/cmake-4.0.1-windows-x86_64/bin/cmake.exe",
+      "args": [
+        "--build",
+        "--preset",
+        "Debug",
+        "--parallel"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": [
+        "DAP: Configure Debug"
+      ],
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "group": "build"
+    },
+    {
+      "label": "DAP: Flash Debug",
+      "type": "process",
+      "command": "D:/RM/toolchains/Toolchains_download/Toolchains_download/OpenOCD/bin/openocd.exe",
+      "args": [
+        "-f",
+        "${workspaceFolder}/openocd-daplink.cfg",
+        "-c",
+        "program build/Debug/DataTouchCode.elf verify reset exit"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": [
+        "DAP: Build Debug"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}
