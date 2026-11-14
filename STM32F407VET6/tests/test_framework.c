@@ -683,8 +683,106 @@ static void remote_tests(void)
     puts("PASS remote: CRC/framing/recovery, mode/ARM/START all modes, origin preservation, "
          "duplicates, conflicts, STOP, link loss");
 }
+/** RESET tests use actual STOP transaction/ACK handling; sensor snapshots are injected. */
+static void reset_tests(void)
+{
+    for (unsigned scenario = 0; scenario < 7; scenario++)
+    {
+        init();
+        remote_control_t r;
+        motion_state_t p = {0};
+        motor_action_t a = {0};
+        Remote_Init(&r, receive_reply);
+        /* Also exercise recovery before any mode has been selected (mask == 0). */
+        for (unsigned i = 0; i < AXIS_COUNT; i++)
+        {
+            ready(i, 1000);
+            motors[i].fault = MOTOR_COMM_FAULT;
+        }
+        Remote_Handle(&r, (remote_request_t){100, RC_RESET, 0}, motors, &p, &a, 1000);
+        assert(r.resetting && r.status.state == RC_STOPPING);
+        assert(last_reply.result == RC_ACCEPTED);
+        for (unsigned i = 0; i < AXIS_COUNT; i++)
+        {
+            assert(!motors[i].origin_valid && motors[i].stop_requested);
+            Motor_Process(&motors[i], 1001);
+            assert(motors[i].pending == EMM_STOP);
+            if (scenario != 1 || i != MOTOR_X)
+                ack(i, EMM_STOP, EMM_ACK_OK, 1002);
+        }
+        Remote_Update(&r, motors, &p, &a, 1003, true);
+        assert(r.resetting); /* Pre-stop feedback must not clear faults. */
+        Remote_Handle(&r, (remote_request_t){100, RC_RESET, 0}, motors, &p, &a, 1010);
+        assert(r.stop_ms == 1000 && last_reply.result == RC_ACCEPTED);
+        for (uint32_t now = 1020; now <= 1300; now += 20)
+        {
+            for (unsigned i = 0; i < AXIS_COUNT; i++)
+            {
+                motors[i].position_ms = motors[i].flags_ms = now;
+                if (scenario == 2 && i == MOTOR_YAW)
+                    motors[i].flags = 0x0F; /* Driver protection remains set. */
+                if (scenario == 3 && i == MOTOR_Z)
+                    motors[i].flags_ms = 900; /* Stale feedback. */
+            }
+            Remote_Update(&r, motors, &p, &a, now, scenario != 4);
+            if (!r.resetting)
+                break;
+        }
+        if (scenario == 0 || scenario >= 5)
+        {
+            assert(r.status.state == RC_IDLE && last_reply.result == RC_COMPLETE);
+            for (unsigned i = 0; i < AXIS_COUNT; i++)
+                assert(!motors[i].fault && !motors[i].origin_valid);
+            Remote_Handle(&r, (remote_request_t){101, RC_START, 0}, motors, &p, &a, 1301);
+            assert(last_reply.result == RC_NOT_READY);
+            Remote_Handle(&r, (remote_request_t){100, RC_RESET, 0}, motors, &p, &a, 1302);
+            assert(last_reply.result == RC_COMPLETE && !r.resetting);
+        }
+        else
+        {
+            Remote_Update(&r, motors, &p, &a, 6000, true);
+            assert(!r.resetting && r.status.state == RC_ERROR);
+            assert(last_reply.result == RC_FAULT);
+        }
+        if (scenario == 5)
+        {
+            Remote_Handle(&r, (remote_request_t){102, RC_RESET, 0}, motors, &p, &a, 1400);
+            Remote_Handle(&r, (remote_request_t){103, RC_STOP, 0}, motors, &p, &a, 1401);
+            assert(!r.resetting && r.status.state == RC_STOPPING);
+        }
+        if (scenario == 6)
+        {
+            /* First STOP times out, only STOP is retried after transport recovery. */
+            Remote_Handle(&r, (remote_request_t){102, RC_RESET, 0}, motors, &p, &a, 1400);
+            for (unsigned i = 0; i < AXIS_COUNT; i++)
+            {
+                Motor_Process(&motors[i], 1401);
+                Motor_Process(&motors[i], 1482);
+                assert(motors[i].stop_failed);
+                HAL_UART_TxCpltCallback(&hal[i]);
+                Motor_Process(&motors[i], 1483);
+            }
+            for (uint32_t now = 1600; now <= 2000; now += 20)
+            {
+                for (unsigned i = 0; i < AXIS_COUNT; i++)
+                {
+                    Motor_Process(&motors[i], now);
+                    if (motors[i].pending == EMM_STOP)
+                        ack(i, EMM_STOP, EMM_ACK_OK, now);
+                    motors[i].flags_ms = motors[i].position_ms = now;
+                }
+                Remote_Update(&r, motors, &p, &a, now, true);
+                if (!r.resetting)
+                    break;
+            }
+            assert(r.status.state == RC_IDLE && last_reply.result == RC_COMPLETE);
+        }
+    }
+    puts("PASS RESET: ACK gate, stable feedback, stale/protection/timeout, dedup, STOP cancellation, retry");
+}
 int main(void)
 {
+    reset_tests();
     remote_tests();
     dwell_with_polling();
     startup_tests();

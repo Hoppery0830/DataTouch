@@ -170,6 +170,8 @@ static void reply(motor_t *m, const emm_reply_t *r, uint32_t now)
         {
             m->mode = MOTOR_HOLD;
             m->stop_failed = false;
+            m->stop_acks++;
+            m->stop_ack_ms = now;
         }
     }
     m->completed++;

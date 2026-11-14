@@ -35,6 +35,7 @@ typedef struct
     uint32_t position_ms, flags_ms, pending_ms, last_rx_ms, next_poll_ms, byte_ms, recovery_ms;
     uint32_t completed, timeouts, rejected; /**< 事务应答处理、超时、拒绝次数；不是运动完成次数。 */
     uint8_t poll_phase;
+    uint32_t stop_acks, stop_ack_ms; /**< 已匹配的成功停止应答次数与时刻，用于 RESET 确认。 */
 } motor_t;
 /* All functions except external task queue wrappers are MotorTask-owned. */
 /** @brief 初始化单电机状态并安排首次查询；不发送使能/运动命令。now 单位为 HAL 毫秒。 */

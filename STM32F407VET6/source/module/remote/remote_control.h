@@ -10,6 +10,9 @@ typedef struct
     uint32_t active_seq, stop_ms;
     uint8_t mask, stop_target;
     bool selected, active;
+    bool resetting; /**< RESET 正在等待三轴停止确认与稳定反馈。 */
+    uint8_t reset_stable_mask, reset_clear_mask;
+    uint32_t reset_acks[AXIS_COUNT], reset_retry[AXIS_COUNT], reset_stable[AXIS_COUNT];
     struct
     {
         remote_request_t request;

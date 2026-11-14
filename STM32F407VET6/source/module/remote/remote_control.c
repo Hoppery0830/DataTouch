@@ -1,5 +1,9 @@
 #include "remote_control.h"
 #include <string.h>
+/** @brief RESET 最多等待 5 秒；反馈须连续有效 200ms；只重试幂等 STOP。 */
+#define RESET_TIMEOUT_MS 5000U
+#define RESET_STABLE_MS 200U
+#define RESET_RETRY_MS 200U
 static void result(remote_control_t *r, uint32_t seq, uint8_t value)
 {
     for (unsigned i = 0; i < 16; i++)
@@ -29,6 +33,7 @@ static void stop(remote_control_t *r, motor_t m[AXIS_COUNT], motion_state_t *p, 
     r->status.state = RC_STOPPING;
     r->stop_target = target;
     r->stop_ms = now;
+    r->resetting = false;
 }
 void Remote_Cancel(remote_control_t *r, motor_t m[AXIS_COUNT], motion_state_t *p, motor_action_t *a,
                    uint32_t now)
@@ -64,6 +69,17 @@ void Remote_Handle(remote_control_t *r, remote_request_t q, motor_t m[AXIS_COUNT
         r->active = true;
         r->active_seq = q.seq;
         stop(r, m, p, a, now, RC_IDLE);
+        if (q.op == RC_RESET)
+        {
+            r->resetting = true;
+            r->reset_stable_mask = r->reset_clear_mask = 0;
+            for (unsigned i = 0; i < AXIS_COUNT; i++)
+            {
+                r->reset_acks[i] = m[i].stop_acks;
+                r->reset_retry[i] = now;
+                m[i].origin_valid = false;
+            }
+        }
         result(r, q.seq, RC_ACCEPTED);
         return;
     }
@@ -117,6 +133,70 @@ void Remote_Handle(remote_control_t *r, remote_request_t q, motor_t m[AXIS_COUNT
     r->active_seq = q.seq;
     result(r, q.seq, RC_ACCEPTED);
 }
+/**
+ * @brief 在 MotorTask 内推进 RESET；仅复用已有反馈，不主动发查询或恢复旧动作。
+ * @note 每轴必须收到本轮停止 ACK，再收到新鲜位置/状态并通过稳定窗口。
+ *       允许各轴在各自事务空隙清故障，只有三轴全部恢复才回报完成。
+ */
+static void reset_update(remote_control_t *r, motor_t m[AXIS_COUNT], uint32_t now,
+                         bool link_alive)
+{
+    if (!link_alive || now - r->stop_ms >= RESET_TIMEOUT_MS)
+    {
+        r->resetting = false;
+        r->status.state = RC_ERROR;
+        for (unsigned i = 0; i < AXIS_COUNT; i++)
+            Motor_RequestStop(&m[i]);
+        finish(r, RC_FAULT);
+        return;
+    }
+    for (unsigned i = 0; i < AXIS_COUNT; i++)
+    {
+        motor_t *motor = &m[i];
+        uint8_t bit = (uint8_t)(1U << i);
+        bool stopped = motor->stop_acks != r->reset_acks[i] &&
+                       !motor->stop_failed && !motor->stop_requested;
+        if (!stopped && !motor->pending && !motor->port->tx_busy &&
+            !motor->stop_requested && !motor->port->broken &&
+            now - r->reset_retry[i] >= RESET_RETRY_MS)
+        {
+            Motor_RequestStop(motor);
+            r->reset_retry[i] = now;
+        }
+        bool feedback = stopped && !motor->port->broken &&
+                        motor->position_valid && motor->flags_valid &&
+                        !(motor->flags & 0x0CU) && motor->mode == MOTOR_HOLD &&
+                        (int32_t)(motor->position_ms - motor->stop_ack_ms) > 0 &&
+                        (int32_t)(motor->flags_ms - motor->stop_ack_ms) > 0 &&
+                        now - motor->position_ms < APP_MOTOR_STALE_MS &&
+                        now - motor->flags_ms < APP_MOTOR_STALE_MS;
+        if (!feedback)
+        {
+            r->reset_stable_mask &= (uint8_t)~bit;
+            r->reset_clear_mask &= (uint8_t)~bit;
+            continue;
+        }
+        if (!(r->reset_stable_mask & bit))
+        {
+            r->reset_stable_mask |= bit;
+            r->reset_stable[i] = now;
+        }
+        if (motor->fault)
+            r->reset_clear_mask &= (uint8_t)~bit;
+        if (now - r->reset_stable[i] >= RESET_STABLE_MS &&
+            !motor->port->tx_busy && Motor_ClearFault(motor, now))
+            r->reset_clear_mask |= bit;
+    }
+    if (r->reset_clear_mask == (1U << AXIS_COUNT) - 1U)
+    {
+        r->resetting = false;
+        r->status.state = RC_IDLE;
+        r->status.fault = 0;
+        r->status.online = (1U << AXIS_COUNT) - 1U;
+        finish(r, RC_COMPLETE);
+    }
+}
+
 void Remote_Update(remote_control_t *r, motor_t m[AXIS_COUNT], motion_state_t *p, motor_action_t *a,
                    uint32_t now, bool link_alive)
 {
@@ -131,6 +211,11 @@ void Remote_Update(remote_control_t *r, motor_t m[AXIS_COUNT], motion_state_t *p
             r->status.online |= 1U << i;
         if (m[i].fault || m[i].stop_failed)
             r->status.fault |= 1U << i;
+    }
+    if (r->resetting)
+    {
+        reset_update(r, m, now, link_alive);
+        return;
     }
     if (!link_alive && (r->status.state == RC_PREPARING || r->status.state == RC_RUNNING ||
                         r->status.state == RC_ARMED))
