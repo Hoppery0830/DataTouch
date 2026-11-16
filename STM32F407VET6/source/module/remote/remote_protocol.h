@@ -9,36 +9,38 @@
 #define RC_REPLY 0x11
 #define RC_STATUS 0x12
 #define RC_HEARTBEAT 0x13
-#define RC_MAX_PAYLOAD 24
+#define RC_MAX_PAYLOAD 128
 /* 请求 payload: seq:u32, op:u8, mode:u8；回复: seq:u32,result:u8。
  * 状态: state,mode,stage,online_mask,fault_mask (5 bytes)。 */
-enum
-{
+enum {
     RC_SELECT = 0,
     RC_ARM,
     RC_START,
     RC_STOP,
     RC_RESET
 };
-enum
-{
+enum {
     RC_ACCEPTED = 0,
     RC_COMPLETE,
     RC_BUSY,
     RC_INVALID,
     RC_NOT_READY,
     RC_FAULT,
-    RC_CANCELLED
+    RC_CANCELLED,
+    RC_CAPTURE_FAILED,
+    RC_CAPTURE_TIMEOUT,
+    RC_NOT_STATIONARY,
+    RC_LIGHT_FAILED
 };
-enum
-{
+enum {
     RC_IDLE = 0,
     RC_ARMED,
     RC_RUNNING,
     RC_DONE,
     RC_ERROR,
     RC_PREPARING,
-    RC_STOPPING
+    RC_STOPPING,
+    RC_IMAGING
 };
 typedef struct
 {
@@ -72,8 +74,7 @@ static inline void RC_Write32(uint8_t *p, uint32_t v)
 static inline uint8_t RC_Crc(const uint8_t *p, size_t n)
 {
     uint8_t c = 255;
-    while (n--)
-    {
+    while (n--) {
         c ^= *p++;
         for (unsigned i = 0; i < 8; i++)
             c = (c & 128) ? (uint8_t)((c << 1) ^ 0x31) : (uint8_t)(c << 1);

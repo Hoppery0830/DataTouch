@@ -3,8 +3,8 @@ const fmt = require("../../utils/fmt.js");
 const COLLECTION="commands", STORAGE_KEY="lastDeviceId", DEFAULT_DEVICE_ID="esp32-dev01";
 const CMDS = [
   { cmd: "arm", label: "ARM", desc: "准备参与电机", cls: "info" },
-  { cmd: "start", label: "START", desc: "执行所选动作一次", cls: "ok" },
-  { cmd: "stop", label: "STOP", desc: "停止当前运动", cls: "warn" },
+  { cmd: "start", label: "START", desc: "拍照成功后执行一次", cls: "ok" },
+  { cmd: "stop", label: "STOP", desc: "取消拍照或停止运动", cls: "warn" },
   { cmd: "reset", label: "RESET", desc: "停止并清理会话", cls: "danger" },
 ];
 
@@ -41,7 +41,7 @@ const MODE_NOTE_ROWS = [
   { name: "揉搓", desc: "Z + Yaw 往复运动" },
   { name: "滑动", desc: "Z + X 方向平移" },
 ];
-const MODE_NOTE_FOOT = "用法：先选模式（只选中，不启动），再 ARM，待准备完成后点 START。命令 60 秒内有效。";
+const MODE_NOTE_FOOT = "用法：先选模式（只选中，不启动），再 ARM，待探头停稳、准备完成后点 START：开补光 → 等曝光稳定 → 采集一次 → 关补光 → 电机动作。采集失败不启动电机。命令 60 秒内有效。";
 
 /** mode_* → 模式中文名（"当前模式"派生用；与 MODES[].name 保持一致） */
 const MODE_NAME = {
@@ -52,9 +52,9 @@ const MODE_NAME = {
 
 
 const STATE_TEXT={pending:"待发送",sent:"已下发，等待确认",accepted:"STM32 已接受",done:"已完成",failed:"失败",cancelled:"已取消",unknown:"结果未知",expired:"已过期"};
-const MOTOR_STATES=["空闲","准备完成，可 START","动作运行中","动作完成","故障","正在准备电机","正在停止"];
-const STAGES=["无","Z 压入","Yaw 揉搓","Yaw 回中","X 滑动","Z 返回","X 返回","动作结束"];
-const RESULTS={ok:"已完成",accepted:"STM32 已接受，等待完成",busy:"设备忙",invalid:"参数非法",not_ready:"尚未 ARM 或准备未完成",fault:"电机或通信故障",cancelled:"已取消",timeout:"确认超时，执行结果未知",offline:"STM32 离线",unknown:"未知命令",expired:"已过期"};
+const MOTOR_STATES=["空闲","准备完成，可 START","动作运行中","动作完成","故障","正在准备电机","正在停止","图像采集中，电机等待"];
+const STAGES=["无","Z 压入","Yaw 揉搓","Yaw 回中","X 滑动","Z 返回","X 返回","动作结束","确认探头停稳","补光与曝光稳定","等待图像采集完成","补光已关闭"];
+const RESULTS={ok:"已完成",accepted:"STM32 已接受，等待完成",busy:"设备忙",invalid:"参数非法",not_ready:"准备未完成或视觉硬件尚未配置",fault:"电机或通信故障",capture_failed:"图像采集失败，电机未启动",capture_timeout:"图像采集超时，电机未启动",not_stationary:"探头尚未停稳，电机未启动",light_failed:"补光控制失败，电机未启动",cancelled:"已取消",timeout:"确认超时，执行结果未知",offline:"STM32 离线",unknown:"未知命令",expired:"已过期"};
 Page({
  data:{deviceId:"",devicePlaceholder:DEFAULT_DEVICE_ID,cmds:CMDS,sendingCmd:"",modes:MODES,
   modeNoteRows:MODE_NOTE_ROWS,modeNoteFoot:MODE_NOTE_FOOT,currentModeCmd:"",currentModeText:"未知",
@@ -72,6 +72,9 @@ Page({
   this._reqSeq++;this._statusSeq++;clearTimeout(this._debounceTimer);this._debounceTimer=setTimeout(()=>this.commitDeviceId(value),500);},
  onDeviceConfirm(e){clearTimeout(this._debounceTimer);this.commitDeviceId((e.detail.value||this.data.deviceId||"").trim());},
  commitDeviceId(id){this.setData({deviceId:id});try{wx.setStorageSync(STORAGE_KEY,id);}catch(e){}this.refresh();},
+ /**
+  * @brief 加载当前设备的 STM32 状态，并忽略已失效的异步响应。
+  */
  loadStatus(){const deviceId=this.data.deviceId,seq=++this._statusSeq;
   if(!deviceId)return;
   wx.cloud.callFunction({name:"sendCommand",data:{deviceId,action:"status"}}).then(res=>{
@@ -97,11 +100,16 @@ Page({
   cmdLabel:CMD_LABEL[cmd]||cmd,stateText:STATE_TEXT[state]||state,stateClass:"st-"+state,isMode:cmd.indexOf("mode_")===0,
   timeText:fmt.formatTime(item.createdAt,true),auxText:RESULTS[item.result]|| (state==="pending"?"等待设备轮询；60 秒内有效":state==="sent"?"等待 STM32 回执":"")};},
  onModeTap(e){this.onSendCommand(e);},
+ /**
+  * @brief 根据设备状态提交普通控制命令；停止等紧急命令可优先提交。
+  * @param e 包含命令 dataset 的小程序点击事件。
+  */
  onSendCommand(e){const cmd=e.currentTarget.dataset.cmd;if(!cmd)return;
   const urgent=cmd==="stop"||cmd==="reset";
   if(this.data.sendingCmd&&!urgent)return;
   const deviceId=this.data.deviceId;if(!deviceId){wx.showToast({title:"请填写设备号",icon:"none"});return;}
   if(!urgent&&!this.data.motorAlive){wx.showToast({title:"等待 STM32 在线",icon:"none"});return;}
+  if(!urgent&&this.data.motorState===7){wx.showToast({title:"图像采集中，请等待",icon:"none"});return;}
   if(cmd==="arm"&&!this.data.currentModeCmd){wx.showToast({title:"先选择模式并等待确认",icon:"none"});return;}
   if(cmd==="start"&&this.data.motorState!==1){wx.showToast({title:"先 ARM，等待准备完成",icon:"none"});return;}
   const seq=++this._sendSeq;this.setData({sendingCmd:cmd});
@@ -113,5 +121,8 @@ Page({
   }).catch(e=>{if(this._visible&&seq===this._sendSeq)wx.showToast({title:e.message||e.errMsg||"下发失败",icon:"none"});})
   .then(()=>{clearTimeout(timer);if(seq===this._sendSeq)this.setData({sendingCmd:""});});
  },
+ openVision(){wx.navigateTo({url:"/pages/vision/vision?deviceId="+encodeURIComponent(this.data.deviceId)});},
+ openTactile(){wx.navigateTo({url:"/pages/tactile/tactile?deviceId="+encodeURIComponent(this.data.deviceId)});},
+ openTelemetry(){wx.navigateTo({url:"/pages/telemetry/telemetry?deviceId="+encodeURIComponent(this.data.deviceId)});},
  onRetry(){this.refresh();}
 });

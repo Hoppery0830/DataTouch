@@ -28,16 +28,14 @@ class DeployStaticContractTests(unittest.TestCase):
         self.assertEqual(config.PRODUCTION_PREVIEW_FPS, 30)
         self.assertGreaterEqual(config.DEBUG_CAMERA_WARMUP_MS, 1000)
 
-    def test_measurement_call_order_is_frozen(self):
+    def test_measurement_turns_light_off_immediately_after_capture(self):
         source = (DEPLOY_ROOT / "data_touch" / "app.py").read_text(encoding="utf-8")
         measurement = source[source.index("def measure_once"):]
         calls = (
             "self.stm32.light_on()",
             "time.sleep_ms(LIGHT_CAPTURE_DELAY_MS)",
             "self.camera.capture_gray()",
-            "remaining_light_ms = LIGHT_ON_DURATION_MS - elapsed_ms(light_started)",
-            "time.sleep_ms(remaining_light_ms)",
-            'self._try_light_off("after_light_window")',
+            'self._try_light_off("after_capture")',
             "evaluate_gray(gray)",
             "append_u_curve(value)",
             "self.stm32.send_u_curve(value)",

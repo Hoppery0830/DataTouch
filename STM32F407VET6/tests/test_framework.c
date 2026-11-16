@@ -554,6 +554,108 @@ static void receive_reply(remote_reply_t q)
     last_reply = q;
     reply_count++;
 }
+static capture_sequence_t fake_capture;
+static bool fake_still = true;
+static unsigned capture_calls, cancel_calls;
+static bool fake_stationary(const motor_t m[AXIS_COUNT], uint32_t now)
+{
+    (void)m;
+    (void)now;
+    return fake_still;
+}
+static bool fake_begin(uint32_t seq, uint32_t now)
+{
+    capture_calls++;
+    fake_capture = (capture_sequence_t){.seq = seq, .epoch = now, .state = CAP_WAIT, .light = true};
+    return true;
+}
+static void fake_status(uint32_t seq, capture_sequence_t *out)
+{
+    (void)seq;
+    *out = fake_capture;
+}
+static void fake_cancel(void)
+{
+    cancel_calls++;
+    fake_capture.state = CAP_FAILED;
+    fake_capture.light = false;
+}
+static const remote_vision_ops_t fake_vision = {fake_stationary, fake_begin, fake_status,
+                                                fake_cancel, NULL, NULL};
+static bool unavailable_capture(void) { return false; }
+static void capture_gate_failures(void)
+{
+    /* For each failure the real remote controller must never enter Action_Start. */
+    for (unsigned scenario = 0; scenario < 8; scenario++)
+    {
+        init();
+        for (unsigned i = 0; i < AXIS_COUNT; i++)
+            ready(i, 1000);
+        remote_control_t r;
+        motion_state_t p = {0};
+        motor_action_t a = {0};
+        Remote_Init(&r, receive_reply);
+        Remote_SetVision(&r, &fake_vision);
+        r.selected = true;
+        r.status.mode = ACTION_PRESS;
+        r.status.state = RC_ARMED;
+        r.mask = 7;
+        fake_still = true;
+        unsigned before = capture_calls;
+        Remote_Handle(&r, (remote_request_t){42, RC_START, 0}, motors, &p, &a, 1000);
+        Remote_Update(&r, motors, &p, &a, 1200, true);
+        assert(capture_calls == before); /* No fresh post-START feedback yet. */
+        for (unsigned i = 0; i < AXIS_COUNT; i++)
+            motors[i].position_ms = motors[i].flags_ms = 1200;
+        Remote_Update(&r, motors, &p, &a, 1200, true);
+        assert(capture_calls == before + 1 && r.status.state == RC_IMAGING);
+        if (scenario < 3)
+        {
+            fake_capture.state = CAP_FAILED;
+            fake_capture.error = scenario == 0   ? CAP_CAMERA_ERROR
+                                 : scenario == 1 ? CAP_TIMEOUT
+                                                 : CAP_LIGHT_ERROR;
+        }
+        else if (scenario == 3)
+            fake_still = false;
+        else if (scenario == 4)
+            motors[MOTOR_X].position += 65536;
+        else if (scenario == 5)
+            Remote_Handle(&r, (remote_request_t){43, RC_STOP, 0}, motors, &p, &a, 1201);
+        if (scenario == 7)
+        {
+            for (unsigned i = 0; i < AXIS_COUNT; i++)
+                motors[i].position_ms = motors[i].flags_ms = 11000;
+            Remote_Update(&r, motors, &p, &a, 11000, true);
+        }
+        else
+            Remote_Update(&r, motors, &p, &a, 1201, scenario != 6);
+        assert(a.status != ACTION_RUNNING && p.status != PATH_RUNNING &&
+               r.status.state != RC_IMAGING);
+        fake_capture.state = CAP_READY;
+        fake_capture.light = false; /* Late success after cancel/failure. */
+        Remote_Update(&r, motors, &p, &a, 1202, true);
+        assert(a.status != ACTION_RUNNING && capture_calls == before + 1);
+    }
+    init();
+    for (unsigned i = 0; i < AXIS_COUNT; i++) ready(i, 1000);
+    remote_control_t pending;
+    motion_state_t path = {0};
+    motor_action_t action = {0};
+    remote_vision_ops_t busy = fake_vision;
+    busy.available = unavailable_capture;
+    Remote_Init(&pending, receive_reply);
+    Remote_SetVision(&pending, &busy);
+    pending.selected = true;
+    pending.status.state = RC_ARMED;
+    unsigned cancelled = cancel_calls, captured = capture_calls;
+    Remote_Handle(&pending, (remote_request_t){99, RC_START, 0}, motors, &path, &action, 1000);
+    assert(pending.status.state == RC_ARMED && !pending.active);
+    assert(cancel_calls == cancelled && capture_calls == captured);
+    fake_still = true;
+    puts("PASS remote capture gate: fresh feedback, camera/timeout/light failure, moving probe, "
+         "STOP, link loss, late success");
+}
 static void remote_tests(void)
 {
     uint8_t frame[32], payload[6] = {1, 0, 0, 0, RC_SELECT, ACTION_SLIDE};
@@ -590,6 +692,7 @@ static void remote_tests(void)
         motion_state_t p = {0};
         motor_action_t a = {0};
         Remote_Init(&r, receive_reply);
+        Remote_SetVision(&r, &fake_vision);
         Remote_Handle(&r, (remote_request_t){1, RC_START, 0}, motors, &p, &a, 1000);
         assert(last_reply.result == RC_NOT_READY);
         Remote_Handle(&r, (remote_request_t){2, RC_SELECT, (uint8_t)mode}, motors, &p, &a, 1000);
@@ -620,7 +723,22 @@ static void remote_tests(void)
         Remote_Handle(&r, (remote_request_t){3, RC_ARM, 0}, motors, &p, &a, now);
         assert(r.status.state == RC_ARMED && last_reply.result == RC_COMPLETE);
         Remote_Handle(&r, (remote_request_t){4, RC_START, 0}, motors, &p, &a, now);
-        assert(r.status.state == RC_RUNNING && last_reply.result == RC_ACCEPTED);
+        assert(r.status.state == RC_IMAGING && last_reply.result == RC_ACCEPTED);
+        assert(a.status != ACTION_RUNNING);
+        unsigned before = capture_calls;
+        Remote_Update(&r, motors, &p, &a, now + 199, true);
+        assert(capture_calls == before && a.status != ACTION_RUNNING);
+        now += 200;
+        for (unsigned i = 0; i < AXIS_COUNT; i++)
+            motors[i].position_ms = motors[i].flags_ms = now;
+        Remote_Update(&r, motors, &p, &a, now, true);
+        assert(capture_calls == before + 1 && r.status.state == RC_IMAGING);
+        fake_capture.state = CAP_READY; /* Successful photo alone cannot start with the lamp on. */
+        Remote_Update(&r, motors, &p, &a, now, true);
+        assert(a.status != ACTION_RUNNING);
+        fake_capture.light = false;
+        Remote_Update(&r, motors, &p, &a, now, true);
+        assert(r.status.state == RC_RUNNING && a.status == ACTION_RUNNING);
         unsigned replies_before = reply_count;
         Remote_Handle(&r, (remote_request_t){4, RC_START, 0}, motors, &p, &a, now);
         assert(reply_count == replies_before + 1 && last_reply.result == RC_ACCEPTED);
@@ -683,8 +801,111 @@ static void remote_tests(void)
     puts("PASS remote: CRC/framing/recovery, mode/ARM/START all modes, origin preservation, "
          "duplicates, conflicts, STOP, link loss");
 }
+static bool reset_light_off(void) { return false; }
+static void reset_cancel(void) {}
+/** RESET tests use actual STOP transaction/ACK handling; sensor snapshots are injected. */
+static void reset_tests(void)
+{
+    for (unsigned scenario = 0; scenario < 8; scenario++)
+    {
+        init();
+        remote_control_t r;
+        motion_state_t p = {0};
+        motor_action_t a = {0};
+        Remote_Init(&r, receive_reply);
+        static const remote_vision_ops_t blocked_light={NULL,NULL,NULL,reset_cancel,reset_light_off,NULL};
+        if(scenario==7) Remote_SetVision(&r,&blocked_light);
+        /* Also exercise recovery before any mode has been selected (mask == 0). */
+        for (unsigned i = 0; i < AXIS_COUNT; i++)
+        {
+            ready(i, 1000);
+            motors[i].fault = MOTOR_COMM_FAULT;
+        }
+        Remote_Handle(&r, (remote_request_t){100, RC_RESET, 0}, motors, &p, &a, 1000);
+        assert(r.resetting && r.status.state == RC_STOPPING);
+        assert(last_reply.result == RC_ACCEPTED);
+        for (unsigned i = 0; i < AXIS_COUNT; i++)
+        {
+            assert(!motors[i].origin_valid && motors[i].stop_requested);
+            Motor_Process(&motors[i], 1001);
+            assert(motors[i].pending == EMM_STOP);
+            if (scenario != 1 || i != MOTOR_X)
+                ack(i, EMM_STOP, EMM_ACK_OK, 1002);
+        }
+        Remote_Update(&r, motors, &p, &a, 1003, true);
+        assert(r.resetting); /* Pre-stop feedback must not clear faults. */
+        Remote_Handle(&r, (remote_request_t){100, RC_RESET, 0}, motors, &p, &a, 1010);
+        assert(r.stop_ms == 1000 && last_reply.result == RC_ACCEPTED);
+        for (uint32_t now = 1020; now <= 1300; now += 20)
+        {
+            for (unsigned i = 0; i < AXIS_COUNT; i++)
+            {
+                motors[i].position_ms = motors[i].flags_ms = now;
+                if (scenario == 2 && i == MOTOR_YAW)
+                    motors[i].flags = 0x0F; /* Driver protection remains set. */
+                if (scenario == 3 && i == MOTOR_Z)
+                    motors[i].flags_ms = 900; /* Stale feedback. */
+            }
+            Remote_Update(&r, motors, &p, &a, now, scenario != 4);
+            if (!r.resetting)
+                break;
+        }
+        if (scenario == 0 || scenario == 5 || scenario == 6)
+        {
+            assert(r.status.state == RC_IDLE && last_reply.result == RC_COMPLETE);
+            for (unsigned i = 0; i < AXIS_COUNT; i++)
+                assert(!motors[i].fault && !motors[i].origin_valid);
+            Remote_Handle(&r, (remote_request_t){101, RC_START, 0}, motors, &p, &a, 1301);
+            assert(last_reply.result == RC_NOT_READY);
+            Remote_Handle(&r, (remote_request_t){100, RC_RESET, 0}, motors, &p, &a, 1302);
+            assert(last_reply.result == RC_COMPLETE && !r.resetting);
+        }
+        else
+        {
+            Remote_Update(&r, motors, &p, &a, 6000, true);
+            assert(!r.resetting && r.status.state == RC_ERROR);
+            assert(last_reply.result == RC_FAULT);
+        }
+        if (scenario == 5)
+        {
+            Remote_Handle(&r, (remote_request_t){102, RC_RESET, 0}, motors, &p, &a, 1400);
+            Remote_Handle(&r, (remote_request_t){103, RC_STOP, 0}, motors, &p, &a, 1401);
+            assert(!r.resetting && r.status.state == RC_STOPPING);
+        }
+        if (scenario == 6)
+        {
+            /* First STOP times out, only STOP is retried after transport recovery. */
+            Remote_Handle(&r, (remote_request_t){102, RC_RESET, 0}, motors, &p, &a, 1400);
+            for (unsigned i = 0; i < AXIS_COUNT; i++)
+            {
+                Motor_Process(&motors[i], 1401);
+                Motor_Process(&motors[i], 1482);
+                assert(motors[i].stop_failed);
+                HAL_UART_TxCpltCallback(&hal[i]);
+                Motor_Process(&motors[i], 1483);
+            }
+            for (uint32_t now = 1600; now <= 2000; now += 20)
+            {
+                for (unsigned i = 0; i < AXIS_COUNT; i++)
+                {
+                    Motor_Process(&motors[i], now);
+                    if (motors[i].pending == EMM_STOP)
+                        ack(i, EMM_STOP, EMM_ACK_OK, now);
+                    motors[i].flags_ms = motors[i].position_ms = now;
+                }
+                Remote_Update(&r, motors, &p, &a, now, true);
+                if (!r.resetting)
+                    break;
+            }
+            assert(r.status.state == RC_IDLE && last_reply.result == RC_COMPLETE);
+        }
+    }
+    puts("PASS RESET: ACK gate, stable feedback, stale/protection/timeout, dedup, STOP cancellation, retry");
+}
 int main(void)
 {
+    capture_gate_failures();
+    reset_tests();
     remote_tests();
     dwell_with_polling();
     startup_tests();

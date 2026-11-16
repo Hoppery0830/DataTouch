@@ -1,5 +1,5 @@
 /** @file touch_bsp.h
- * @brief 触觉专用外设：TIM3/ADC1、UART4 RX、USART1 PC TX；TouchTask 单消费者。
+ * @brief 触觉专用外设：TIM3/ADC1、UART4 RX、USART1 K230 RX/ACK 或 PC TX；TouchTask 单消费者。
  */
 #pragma once
 #include "stm32f4xx_hal.h"
@@ -52,3 +52,7 @@ void Touch_BSP_GetStats(touch_bsp_stats_t *out);
 void Touch_UART_RxEvent(UART_HandleTypeDef *h);
 void Touch_UART_TxComplete(UART_HandleTypeDef *h);
 void Touch_UART_Error(UART_HandleTypeDef *h);
+
+void Touch_UART_RxComplete(UART_HandleTypeDef *h);
+bool Touch_BSP_ReadK230(uint8_t *b);
+uint8_t Touch_BSP_Light(bool on);

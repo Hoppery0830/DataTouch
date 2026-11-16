@@ -20,7 +20,7 @@ ACK_TIMEOUT_MS = 500
 MAX_ATTEMPTS = 3
 RETRY_DELAY_MS = 20
 RX_POLL_MS = 1
-MAX_RX_PAYLOAD = 4
+MAX_RX_PAYLOAD = 16
 
 
 def frame_checksum(frame_type, payload):
@@ -46,6 +46,7 @@ def pack_u_curve(value):
     return struct.pack("<f", float(value))
 
 
+## @brief 管理 K230 与 STM32 间的串口帧、校验和与应答。
 class STM32Link:
     """UART2 transport with resynchronization, checksum checks and retries."""
 
@@ -61,6 +62,10 @@ class STM32Link:
         self.max_attempts = int(max_attempts)
         self.retry_delay_ms = int(retry_delay_ms)
         self._rx = bytearray()
+        self.rx_bytes = 0
+        self.rx_frames = 0
+        self.rx_bad_checksum = 0
+        self._diagnostic_ms = self._ticks_ms()
         self._owns_uart = uart is None
         self._fpioa = None
 
@@ -129,11 +134,35 @@ class STM32Link:
             payload = bytes(self._rx[4:4 + payload_length])
             checksum = self._rx[4 + payload_length]
             if checksum != frame_checksum(frame_type, payload):
+                self.rx_bad_checksum += 1
                 self._rx = self._rx[1:]
                 continue
 
             self._rx = self._rx[frame_length:]
+            self.rx_frames += 1
             return frame_type, payload
+
+    ## @brief 非阻塞读取串口并尝试提取一帧。
+    # @return (帧类型, 负载)；没有完整有效帧时返回 None。
+    def poll_frame(self):
+        """Bounded nonblocking receive used by the coordinated camera service."""
+        now = self._ticks_ms()
+        if self._ticks_diff(now, self._diagnostic_ms) >= 5000:
+            self._diagnostic_ms = now
+            print("K230_UART_RX bytes=%d frames=%d bad_checksum=%d buffered=%d" % (
+                self.rx_bytes, self.rx_frames, self.rx_bad_checksum, len(self._rx)))
+        frame = self._extract_frame()
+        if frame is not None:
+            return frame
+        available = min(int(self.uart.any()), 128)
+        if available > 0:
+            chunk = self.uart.read(available)
+            if chunk:
+                self.rx_bytes += len(chunk)
+                self._rx.extend(chunk)
+        if len(self._rx) > 256:
+            self._rx = self._rx[-256:]
+        return self._extract_frame()
 
     def receive_frame(self, timeout_ms=None):
         """Receive one valid frame before a bounded timeout."""

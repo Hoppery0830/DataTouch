@@ -14,6 +14,8 @@
 #include "dwt_bsp.h"
 #include "usart.h"
 #include <string.h>
+#include <math.h>
+#include "touch_task.h"
 extern osThreadId_t MotorTaskHandle;
 #define EVENT_RX 1U
 #define EVENT_TICK 2U
@@ -26,6 +28,21 @@ static remote_control_t remote;
 static motor_task_status_t published;
 static volatile uint32_t tick_count;
 static volatile bool stop_request;
+static bool capture_stationary(const motor_t m[AXIS_COUNT], uint32_t now)
+{
+    if (!TOUCH_LIGHT_CONFIGURED || !TOUCH_USART1_K230)
+        return false;
+    for (unsigned i = 0; i < AXIS_COUNT; i++) {
+        bool query = !m[i].pending || m[i].pending == EMM_POSITION || m[i].pending == EMM_FLAGS || m[i].pending == EMM_SPEED;
+        if (!Motor_Healthy(&m[i], now) || !m[i].origin_valid || !m[i].enable_requested ||
+            (m[i].flags & 3U) != 3U || m[i].mode == MOTOR_SPEED_MODE || m[i].stop_requested || m[i].stop_failed || !query ||
+            !isfinite(Axis_Position(&g_axis_config[i], m[i].position)))
+            return false;
+    }
+    return true;
+}
+static const remote_vision_ops_t vision_ops = { capture_stationary, TouchTask_CaptureBegin,
+                                                TouchTask_CaptureStatus, TouchTask_CaptureCancel, TouchTask_LightOff, TouchTask_CaptureAvailable };
 /** @brief 串口 ISR 唤醒桥接：置线程标志 EVENT_RX；中断优先级须满足 FreeRTOS ISR API 约束。 */
 void UART_BSP_NotifyFromISR(void)
 {
@@ -45,17 +62,10 @@ bool MotorTask_Submit(const motor_command_t *c)
 {
     if (!c || !g_motor_commands || c->kind > MOTOR_CMD_ACTION || c->kind < MOTOR_CMD_PATH)
         return false;
-    if (c->kind == MOTOR_CMD_PATH)
-    {
-        if (!Motion_Validate(&c->path))
-            return false;
-    }
-    else if (c->kind == MOTOR_CMD_ACTION)
-    {
-        if ((unsigned)c->action_mode >= ACTION_MODE_COUNT)
-            return false;
-    }
-    else if ((unsigned)c->axis >= AXIS_COUNT)
+    /* Coordinated firmware accepts motion only through remote START + capture gate. */
+    if (c->kind == MOTOR_CMD_PATH || c->kind == MOTOR_CMD_ACTION)
+        return false;
+    if ((unsigned)c->axis >= AXIS_COUNT)
         return false;
     if (xQueueSend(g_motor_commands, c, 0) != pdPASS)
         return false;
@@ -63,10 +73,10 @@ bool MotorTask_Submit(const motor_command_t *c)
         (void)osThreadFlagsSet(MotorTaskHandle, EVENT_COMMAND);
     return true;
 }
-/** @brief 外部任务选择固定动作，不自动使能或清零。 */
+/** @brief 保留接口兼容性；联动固件拒绝直接动作，请使用远程 START 完成采图互锁。 */
 bool MotorTask_RunAction(motor_action_mode_t mode)
 {
-    motor_command_t cmd = {.kind = MOTOR_CMD_ACTION, .action_mode = mode};
+    motor_command_t cmd = { .kind = MOTOR_CMD_ACTION, .action_mode = mode };
     return MotorTask_Submit(&cmd);
 }
 /** @brief 任务上下文发出独立停止请求；下一次 MotorTask 循环中清队列并中止自检/路径。
@@ -91,8 +101,7 @@ void MotorTask_GetStatus(motor_task_status_t *out)
 /** @brief 从任务独占对象构造状态，再在短临界区发布，避免外部读取到混合时刻的数据。 */
 static void publish(motor_task_status_t *s, uint32_t now)
 {
-    for (unsigned i = 0; i < AXIS_COUNT; i++)
-    {
+    for (unsigned i = 0; i < AXIS_COUNT; i++) {
         s->position[i] = Axis_Position(&g_axis_config[i], motors[i].position);
         s->fault[i] = motors[i].fault;
         s->online[i] = Motor_Healthy(&motors[i], now);
@@ -117,14 +126,14 @@ void StartMotorTask(void *argument)
 {
     (void)argument;
     /* 硬件编号固定映射：UART5→X、USART6→Z、USART2→Yaw。 */
-    UART_HandleTypeDef *hal[AXIS_COUNT] = {&huart5, &huart6, &huart2};
-    for (unsigned i = 0; i < AXIS_COUNT; i++)
-    {
+    UART_HandleTypeDef *hal[AXIS_COUNT] = { &huart5, &huart6, &huart2 };
+    for (unsigned i = 0; i < AXIS_COUNT; i++) {
         if (!UART_BSP_Start(&g_motor_ports[i], hal[i]))
             Error_Handler();
         Motor_Init(&motors[i], &g_motor_ports[i], APP_MOTOR_ADDRESS, HAL_GetTick());
     }
     Remote_Init(&remote, RemoteTask_Reply);
+    Remote_SetVision(&remote, &vision_ops);
     Board_StartControlTick();
     motor_selftest_t selftest;
     SelfTest_Init(&selftest, HAL_GetTick());
@@ -132,12 +141,11 @@ void StartMotorTask(void *argument)
     Startup_Init(&startup, HAL_GetTick());
     bool startup_command = false;
     bool selftest_command = false;
-    motor_task_status_t status = {0};
+    motor_task_status_t status = { 0 };
     motor_command_t command;
     bool have_command = false;
     uint32_t command_ms = 0, last_tick = 0;
-    for (;;)
-    {
+    for (;;) {
         (void)osThreadFlagsWait(EVENT_RX | EVENT_TICK | EVENT_COMMAND | EVENT_STOP, osFlagsWaitAny,
                                 2);
         uint64_t begin = DWT_BSP_NowUs();
@@ -149,8 +157,7 @@ void StartMotorTask(void *argument)
         taskEXIT_CRITICAL();
         /* 第一阶段：停止优先于普通命令；随后处理三路反馈与通信超时。 */
         path_status_t previous_path = motion.status;
-        if (stop)
-        {
+        if (stop) {
             Remote_Cancel(&remote, motors, &motion, &action, now);
             Startup_Cancel(&startup);
             startup_command = false;
@@ -165,8 +172,7 @@ void StartMotorTask(void *argument)
             Motor_Process(&motors[i], now);
         remote_request_t request;
         bool urgent_remote = false;
-        while (RemoteTask_Take(&request, true))
-        {
+        while (RemoteTask_Take(&request, true)) {
             urgent_remote = true;
             Startup_Cancel(&startup);
             SelfTest_Cancel(&selftest);
@@ -176,12 +182,16 @@ void StartMotorTask(void *argument)
         }
         if (!stop && !urgent_remote && RemoteTask_Take(&request, false))
             Remote_Handle(&remote, request, motors, &motion, &action, now);
+        if (remote.active) {
+            have_command = startup_command = selftest_command = false;
+            Startup_Cancel(&startup);
+            SelfTest_Cancel(&selftest);
+            xQueueReset(g_motor_commands);
+        }
         /* 第二阶段：线程标志会合并，独立计数器用来发现漏掉的控制节拍。 */
         uint32_t ticks = tick_count, delta = ticks - last_tick;
-        if (delta)
-        {
-            if (delta > 1)
-            {
+        if (delta) {
+            if (delta > 1) {
                 status.missed_ticks += delta - 1;
                 if (motion.status == PATH_RUNNING)
                     Motion_Abort(&motion, motors, true);
@@ -191,8 +201,7 @@ void StartMotorTask(void *argument)
             Motion_Update(&motion, motors, now);
             Action_Update(&action, &motion, motors, now);
         }
-        if (motion.status == PATH_FAILED && previous_path != PATH_FAILED)
-        {
+        if (motion.status == PATH_FAILED && previous_path != PATH_FAILED) {
             xQueueReset(g_motor_commands);
             have_command = false;
             Startup_CommandResult(&startup, false, now);
@@ -201,10 +210,10 @@ void StartMotorTask(void *argument)
             selftest_command = false;
         }
         Remote_Update(&remote, motors, &motion, &action, now, RemoteTask_LinkAlive(now));
+        TouchTask_TactileObserve(remote.active_seq, remote.status.state, remote.status.mode, (uint8_t)action.stage, now);
         /* 第三阶段：外部队列优先，自检仅在分发器空闲时产生下一条命令。 */
         if (!stop && !remote.active && remote.status.state != RC_STOPPING && !have_command &&
-            xQueueReceive(g_motor_commands, &command, 0) == pdPASS)
-        {
+            xQueueReceive(g_motor_commands, &command, 0) == pdPASS) {
             /* An external command takes ownership; never restart the bench test. */
             Startup_Cancel(&startup);
             startup_command = false;
@@ -213,34 +222,29 @@ void StartMotorTask(void *argument)
             have_command = true;
             command_ms = now;
         }
-        if (!stop && !have_command && Startup_Update(&startup, motors, &action, now, &command))
-        {
+        if (!stop && !have_command && Startup_Update(&startup, motors, &action, now, &command)) {
             have_command = true;
             startup_command = true;
             command_ms = now;
         }
-        if (!stop && !have_command && SelfTest_Update(&selftest, motors, &motion, now, &command))
-        {
+        if (!stop && !have_command && SelfTest_Update(&selftest, motors, &motion, now, &command)) {
             have_command = true;
             selftest_command = true;
             command_ms = now;
         }
         /* 同一个分发器处理外部和自检命令；等待当前事务结束最多 500ms。 */
-        if (have_command)
-        {
+        if (have_command) {
             bool done = true, ok = false;
             if (command.kind == MOTOR_CMD_ACTION)
                 ok = Action_Start(&action, command.action_mode, &motion, motors, now);
             else if (command.kind == MOTOR_CMD_PATH && action.status != ACTION_RUNNING)
                 ok = Motion_Start(&motion, &command.path, motors, now);
-            else if (motion.status != PATH_RUNNING && action.status != ACTION_RUNNING)
-            {
+            else if (motion.status != PATH_RUNNING && action.status != ACTION_RUNNING) {
                 motor_t *m = &motors[command.axis];
                 if (m->pending || m->port->tx_busy || m->stop_requested)
                     done = now - command_ms >= 500U;
                 else
-                    switch (command.kind)
-                    {
+                    switch (command.kind) {
                     case MOTOR_CMD_ENABLE:
                         ok = Motor_Enable(m, command.enable, now);
                         break;
@@ -254,8 +258,7 @@ void StartMotorTask(void *argument)
                         break;
                     }
             }
-            if (done)
-            {
+            if (done) {
                 if (startup_command)
                     Startup_CommandResult(&startup, ok, now);
                 startup_command = false;
@@ -270,16 +273,14 @@ void StartMotorTask(void *argument)
             }
         }
         /* 自检首次失败时只触发一次中止；后续仍允许轮询和外部故障恢复命令。 */
-        if (selftest.state == SELFTEST_FAILED && status.selftest_state != SELFTEST_FAILED)
-        {
+        if (selftest.state == SELFTEST_FAILED && status.selftest_state != SELFTEST_FAILED) {
             Motion_Abort(&motion, motors, true);
             xQueueReset(g_motor_commands);
             have_command = false;
             selftest_command = false;
         }
         /* 上电准备失败只请求一次停止，锁存失败后仍允许外部恢复。 */
-        if (startup.state == STARTUP_FAILED && status.startup_state != STARTUP_FAILED)
-        {
+        if (startup.state == STARTUP_FAILED && status.startup_state != STARTUP_FAILED) {
             Action_Cancel(&action);
             Motion_Abort(&motion, motors, true);
             xQueueReset(g_motor_commands);

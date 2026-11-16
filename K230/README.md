@@ -4,8 +4,8 @@
 
 ## 运行与保存
 
-- 默认进入生产模式；GPIO21 短按并释放后触发一次测评，长按 3 秒切换到调试模式并重启。模式保存在 `/sdcard/datatouch_mode.txt`。
-- 生产测评顺序：STM32 补光开启并 ACK → 等待 2 秒 → 拍摄 → 保持补光至 5 秒 → 关闭补光 → 计算 U_curve → 保存评分 → 向 STM32 发送 float32 评分并等待 ACK。
+- 默认生产模式由 F4 令牌请求触发一次测评（REMOTE_CAPTURE_ENABLED=True）；GPIO21 长按 3 秒仍可切换调试模式。模式保存在 `/sdcard/datatouch_mode.txt`。
+- 生产测评顺序：F4 三轴停稳 → PD14 开灯等待 2 秒 → 令牌请求拍摄 → F4 关灯放行 → 计算并保存 U_curve → 发送令牌和指标，等待 F4 确认（最多 5 次）。完整链路见 [视觉实验结果联调](../docs/视觉实验结果联调_2026-11-14.md)。
 - 相机使用 CSI1、1920×1080 RGB565，ROI 为 `(240, 135, 1440, 810)`，灰度测评输入为 256×256，焦点位置为 275。
 - 日志为 `/sdcard/data_touch_results/u_curve.txt`，每行 `measurement_index,U_curve`，无表头，无时间戳。生产与调试测评共用连续序号。
 - 调试入口 `debug_main.py` 支持预览、`capture_once()`、`evaluate_once()` 和 `capture_evaluate_save()`。测评照片采用与日志一致的 `measure_<index>.jpg` 编号。`capture_evaluate_save()` 在照片和日志保存完成后向F4发送评分；单独预览、拍照、试算不发送评分。

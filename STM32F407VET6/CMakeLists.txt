@@ -67,6 +67,8 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     # Add user defined libraries
 )
 
+set(TOUCH_USART1_K230 1 CACHE STRING "USART1: 1=K230, 0=PC")
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE TOUCH_USART1_K230=${TOUCH_USART1_K230})
 add_subdirectory(source)
 
 add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD

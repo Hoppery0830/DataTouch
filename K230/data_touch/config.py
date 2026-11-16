@@ -33,3 +33,6 @@ DEBUG_CAMERA_WARMUP_MS = 1000
 # This does not change the sensor parameters or the frozen measurement path.
 PRODUCTION_PREVIEW_FPS = 30
 PRODUCTION_PREVIEW_QUALITY = 100
+
+# Production tests are requested by F4 after stationary checks and exposure stabilization.
+REMOTE_CAPTURE_ENABLED = True

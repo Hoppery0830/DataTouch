@@ -5,7 +5,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-typedef enum { TOUCH_FORCE_UNKNOWN, TOUCH_FORCE_ACTIVE, TOUCH_FORCE_MODBUS } touch_force_mode_t;
+typedef enum { TOUCH_FORCE_UNKNOWN,
+               TOUCH_FORCE_ACTIVE,
+               TOUCH_FORCE_MODBUS } touch_force_mode_t;
 typedef struct {
     float values[6]; /* Fx,Fy,Fz:N; Mx,My,Mz:N*m，未扣零偏 */
     uint32_t timestamp_ms, count;

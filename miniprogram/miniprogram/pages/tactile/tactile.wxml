@@ -1,0 +1,14 @@
+<view class="page">
+ <view class="card"><view class="title">触觉实验结果</view><view>设备 {{deviceId}}</view><view class="muted">每次实验一条已保存摘要；排除空闲与回程。指标来自有效阶段的 100 ms 采样块，仍需传感器标定。</view></view>
+ <view class="card" wx:if="{{error}}"><view>{{error}}</view><button bindtap="retry">重试</button></view>
+ <view class="card" wx:for="{{rows}}" wx:key="_id">
+  <view class="title">{{item.modeText}}</view><view>{{item.outcomeText}} · 已保存</view>
+  <view>{{item.qualityText}}</view><view class="muted">实验 {{item.experimentToken}}</view>
+  <view class="muted">入库 {{item.timeText}} · 动作历时 {{item.durationText}} s</view>
+  <view class="muted">有效力块 {{item.result.forceBlocks}} / {{item.result.blocks}} · 有效振动块 {{item.result.adcBlocks}} / {{item.result.blocks}}</view>
+  <view class="row" wx:for="{{item.metrics}}" wx:for-item="metric" wx:key="label"><text>{{metric.label}}</text><text>{{metric.value}} {{metric.unit}}</text></view>
+  <view class="row"><text>同实验 U_curve</text><text>{{item.visualText}}</text></view>
+ </view>
+ <view wx:if="{{!loading && !rows.length && !error}}" class="card">暂无已保存的触觉实验结果。更新固件后进行一次实验，完成或中断后上传。</view>
+ <view wx:if="{{loading}}">正在加载…</view><view wx:if="{{more}}">上拉查看更多</view>
+</view>

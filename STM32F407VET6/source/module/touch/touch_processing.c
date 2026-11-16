@@ -1,3 +1,7 @@
+/**
+ * @file touch_processing.c
+ * @brief 解析六轴力报文并处理 ADXL335 三轴 ADC 数据。
+ */
 #include "touch_processing.h"
 #include "touch_config.h"
 #include <math.h>
@@ -21,27 +25,48 @@ static void consume(touch_parser_t *p, unsigned n)
 }
 bool Touch_Parse(touch_parser_t *p, uint8_t byte, uint32_t now)
 {
-    if (!p) return false;
-    if (now - p->last_byte_ms > 50U) p->used = 0;
+    if (!p)
+        return false;
+    if (now - p->last_byte_ms > 50U)
+        p->used = 0;
     p->last_byte_ms = now;
-    if (p->used == sizeof(p->bytes)) consume(p, 1);
+    if (p->used == sizeof(p->bytes))
+        consume(p, 1);
     p->bytes[p->used++] = byte;
     while (p->used) {
         unsigned offset, size;
         touch_force_mode_t mode;
         if (p->bytes[0] == 0x53) {
-            if (p->used < 2) return false;
-            if (p->bytes[1] != 0x54) { consume(p, 1); continue; }
-            offset = 2; size = 28; mode = TOUCH_FORCE_ACTIVE;
+            if (p->used < 2)
+                return false;
+            if (p->bytes[1] != 0x54) {
+                consume(p, 1);
+                continue;
+            }
+            offset = 2;
+            size = 28;
+            mode = TOUCH_FORCE_ACTIVE;
         } else if (p->bytes[0] == 1) {
-            if (p->used < 3) return false;
-            if (p->bytes[1] != 3 || p->bytes[2] != 24) { consume(p, 1); continue; }
-            offset = 3; size = 29; mode = TOUCH_FORCE_MODBUS;
-        } else { consume(p, 1); continue; }
-        if (p->used < size) return false;
+            if (p->used < 3)
+                return false;
+            if (p->bytes[1] != 3 || p->bytes[2] != 24) {
+                consume(p, 1);
+                continue;
+            }
+            offset = 3;
+            size = 29;
+            mode = TOUCH_FORCE_MODBUS;
+        } else {
+            consume(p, 1);
+            continue;
+        }
+        if (p->used < size)
+            return false;
         uint16_t crc = (uint16_t)p->bytes[size - 2] | (uint16_t)p->bytes[size - 1] << 8;
         if (crc != Touch_CRC16(p->bytes, size - 2)) {
-            p->crc_errors++; consume(p, 1); continue;
+            p->crc_errors++;
+            consume(p, 1);
+            continue;
         }
         float v[6];
         bool finite = true;
@@ -50,10 +75,14 @@ bool Touch_Parse(touch_parser_t *p, uint8_t byte, uint32_t now)
             uint32_t bits = (uint32_t)b[0] | (uint32_t)b[1] << 8 |
                             (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
             memcpy(&v[i], &bits, sizeof(float));
-            if (!isfinite(v[i])) finite = false;
+            if (!isfinite(v[i]))
+                finite = false;
         }
         consume(p, size);
-        if (!finite) { p->invalid_values++; continue; }
+        if (!finite) {
+            p->invalid_values++;
+            continue;
+        }
         memcpy(p->latest.values, v, sizeof(v));
         p->latest.timestamp_ms = now;
         p->latest.count++;
@@ -66,22 +95,28 @@ bool Touch_Parse(touch_parser_t *p, uint8_t byte, uint32_t now)
 int32_t Touch_Milli(float v)
 {
     float m = v * 1000.0f;
-    if (isnan(m)) return 0;
-    if (m >= (float)INT32_MAX) return INT32_MAX;
-    if (m <= (float)INT32_MIN) return INT32_MIN;
+    if (isnan(m))
+        return 0;
+    if (m >= (float)INT32_MAX)
+        return INT32_MAX;
+    if (m <= (float)INT32_MIN)
+        return INT32_MIN;
     return (int32_t)(m >= 0 ? m + 0.5f : m - 0.5f);
 }
 bool Touch_ProcessADC(const uint16_t *samples, size_t frames, touch_adxl_t *out)
 {
-    if (!samples || !out || !frames || frames > TOUCH_BLOCK_FRAMES) return false;
-    const float zero[3] = {TOUCH_ZERO_X_RAW, TOUCH_ZERO_Y_RAW, TOUCH_ZERO_Z_RAW};
-    const float sens[3] = {TOUCH_SENS_X_RAW_G, TOUCH_SENS_Y_RAW_G, TOUCH_SENS_Z_RAW_G};
-    uint32_t sums[3] = {0};
+    if (!samples || !out || !frames || frames > TOUCH_BLOCK_FRAMES)
+        return false;
+    const float zero[3] = { TOUCH_ZERO_X_RAW, TOUCH_ZERO_Y_RAW, TOUCH_ZERO_Z_RAW };
+    const float sens[3] = { TOUCH_SENS_X_RAW_G, TOUCH_SENS_Y_RAW_G, TOUCH_SENS_Z_RAW_G };
+    uint32_t sums[3] = { 0 };
     out->clipped = false;
     for (size_t i = 0; i < frames * 3; i++) {
-        if (samples[i] > 4095) return false;
+        if (samples[i] > 4095)
+            return false;
         sums[i % 3] += samples[i];
-        if (samples[i] == 0 || samples[i] == 4095) out->clipped = true;
+        if (samples[i] == 0 || samples[i] == 4095)
+            out->clipped = true;
     }
     for (unsigned a = 0; a < 3; a++) {
         out->raw[a] = (uint16_t)(sums[a] / frames);

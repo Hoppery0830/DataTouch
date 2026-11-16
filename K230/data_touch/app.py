@@ -1,4 +1,4 @@
-"""Final one-shot KEY -> STM32 light -> CSI -> U_curve deployment."""
+"""Token-based F4 request -> CSI -> U_curve with bounded acknowledgement retries."""
 
 import gc
 import machine
@@ -14,12 +14,12 @@ from data_touch.config import (
     EXPECTED_BACKEND,
     IDLE_POLL_MS,
     LIGHT_CAPTURE_DELAY_MS,
-    LIGHT_ON_DURATION_MS,
     CAMERA_HEIGHT,
     CAMERA_WIDTH,
     PRODUCTION_PREVIEW_FPS,
     PRODUCTION_PREVIEW_QUALITY,
     RESULT_TXT,
+    REMOTE_CAPTURE_ENABLED,
 )
 from data_touch.key import KeyTrigger, LONG_PRESS, SHORT_PRESS
 from data_touch.result_log import append_u_curve, initialize_log, line_count
@@ -32,7 +32,8 @@ from mode_config import (
     set_mode,
     software_reset,
 )
-from stm32_link import STM32Link
+from stm32_link import STM32Link, TYPE_U_CURVE, pack_u_curve
+from data_touch.capture_service import CaptureService
 
 if ALGORITHM_ROOT not in sys.path:
     sys.path.insert(0, ALGORITHM_ROOT)
@@ -90,6 +91,7 @@ class CameraApplication:
         self._media_ready = True
         self.camera.start()
         self.stm32 = STM32Link()
+        self.capture_service = CaptureService(self.stm32, self.camera)
         self.key = KeyTrigger()
         gc.collect()
         report_runtime_state(PRODUCTION_RUNNING, "BOOT")
@@ -140,7 +142,6 @@ class CameraApplication:
         self.measurement_busy = True
         gray = result = None
         light_off_attempted = False
-        light_started = None
         started = None
         try:
             started = now_ms()
@@ -150,17 +151,13 @@ class CameraApplication:
                 print("K230_DEPLOY_CANCELLED reason=LIGHT_ON_ACK_FAILED")
                 return None
 
-            light_started = now_ms()
             time.sleep_ms(LIGHT_CAPTURE_DELAY_MS)
             gray = self.camera.capture_gray()
 
-            remaining_light_ms = LIGHT_ON_DURATION_MS - elapsed_ms(light_started)
-            if remaining_light_ms > 0:
-                time.sleep_ms(remaining_light_ms)
-
             light_off_attempted = True
-            if not self._try_light_off("after_light_window"):
-                print("K230_DEPLOY_WARNING continuing_with_captured_image")
+            if not self._try_light_off("after_capture"):
+                print("K230_DEPLOY_CANCELLED reason=LIGHT_OFF_ACK_FAILED")
+                return None
 
             result, value = evaluate_gray(gray)
             before_lines = line_count()
@@ -205,6 +202,53 @@ class CameraApplication:
             gc.collect()
             print("K230_DEPLOY_READY output=U_curve log=%s free_heap=%d" % (RESULT_TXT, mem_free()))
 
+    ## @brief 采图放行后计算、保存并回传 U_curve。
+    # @return 纹理测量记录；无放行结果或处理失败时返回 None。
+    def remote_measure_once(self):
+        """Capture-complete is independent of the slower image feature calculation."""
+        self.measurement_busy = True
+        acquired = gray = result = None
+        try:
+            acquired = self.capture_service.poll()
+            if acquired is None:
+                return None
+            token, gray = acquired
+            result, value = evaluate_gray(gray)
+            before_lines = line_count()
+            line = append_u_curve(value)
+            # Independent recovery log: retain token/value even when UART delivery fails.
+            import struct
+            seq, epoch = struct.unpack("<II", token)
+            token_text = "%08x%08x" % (seq, epoch)
+            try:
+                with open(RESULT_TXT + ".tokens", "a") as token_log:
+                    token_log.write("%s,%.9g\n" % (token_text, value))
+                    token_log.flush()
+            except Exception as log_error:
+                print("K230_TOKEN_LOG_FAILED error=%s" % log_error)
+            # Do not flush incoming F4 requests while uploading this optional result.
+            sent = False
+            try:
+                sent = self.capture_service.send_result(token, value)
+                if not sent:
+                    print("K230_RESULT_UNCONFIRMED token=%s" % bytes(token).hex())
+            except Exception as error:
+                print("K230_U_CURVE_SEND_ERROR error=%s" % error)
+            return {"index": int(line.split(",", 1)[0]), "U_curve": value,
+                    "line": line, "txt_lines_before": before_lines,
+                    "capture_token": token, "uart_sent": sent}
+        except Exception as error:
+            if _is_ide_control_interrupt(error):
+                raise
+            # Capture was already confirmed; an algorithm/SD error cannot retroactively
+            # revoke it. F4 gates motion on the copied image, not on U_curve.
+            print("K230_REMOTE_PROCESSING_ERROR error=%s" % error)
+            return None
+        finally:
+            acquired = gray = result = None
+            self.measurement_busy = False
+            gc.collect()
+
     def run(self, max_measurements=None):
         completed = 0
         rows = []
@@ -217,6 +261,16 @@ class CameraApplication:
                 self.mode_switch_requested = DEBUG
                 self.request_stop("KEY_LONG_PRESS")
                 print("K230_MODE_SWITCH target=DEBUG reset=PENDING")
+                continue
+            if REMOTE_CAPTURE_ENABLED:
+                if event == SHORT_PRESS:
+                    print("K230_KEY_IGNORED use=MINIPROGRAM_START")
+                row = self.remote_measure_once()
+                if row is not None:
+                    completed += 1
+                    if max_measurements is not None:
+                        rows.append(row)
+                time.sleep_ms(IDLE_POLL_MS)
                 continue
             if event == SHORT_PRESS:
                 if self.measurement_busy:

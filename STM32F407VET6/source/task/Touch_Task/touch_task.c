@@ -1,3 +1,7 @@
+/**
+ * @file touch_task.c
+ * @brief 采集并发布触觉数据，管理 K230 采图事务和补光输出。
+ */
 #include "touch_task.h"
 #include "main.h"
 #include "FreeRTOS.h"
@@ -5,23 +9,139 @@
 #include "cmsis_os2.h"
 #include <stdio.h>
 #include <string.h>
+#include "k230_link.h"
+#include "visual_result.h"
+#include "remote_protocol.h"
+static visual_result_t visual;
+static tactile_result_t tactile;
+#if TOUCH_USART1_K230
+static uint8_t visual_ack[14];
+static bool visual_ack_pending;
+#endif
+bool TouchTask_VisualTake(uint32_t now, uint8_t out[12])
+{
+    taskENTER_CRITICAL(); bool ok=Visual_Take(&visual,now,out); taskEXIT_CRITICAL(); return ok;
+}
+void TouchTask_VisualAck(const uint8_t p[9])
+{
+    taskENTER_CRITICAL(); Visual_Ack(&visual,p); taskEXIT_CRITICAL();
+}
+#if TOUCH_USART1_K230
+static k230_link_t k230;
+#endif
 
 static StaticTask_t task_cb;
 static StackType_t task_stack[1024];
 volatile touch_status_t g_touch_status;
 static touch_status_t current;
 static touch_parser_t parser;
+static touch_features_t features;
+static touch_telemetry_t telemetry;
+static capture_sequence_t capture, capture_status;
+static uint32_t capture_seq;
+static uint8_t capture_command;
+static bool capture_hardware_ready;
+bool TouchTask_LightOff(void)
+{
+    taskENTER_CRITICAL(); bool ok=capture_command==0 && !capture_status.light; taskEXIT_CRITICAL(); return ok;
+}
+
+
+bool TouchTask_CaptureAvailable(void)
+{
+    taskENTER_CRITICAL();
+    bool ok = TOUCH_USART1_K230 && TOUCH_LIGHT_CONFIGURED && capture_hardware_ready &&
+        !capture_command && !visual.pending && !tactile.pending && !tactile.active &&
+        (capture_status.state != CAP_READY || Visual_Complete(&visual, capture_status.seq, capture_status.epoch));
+    taskEXIT_CRITICAL();
+    return ok;
+}
+
+bool TouchTask_CaptureBegin(uint32_t seq, uint32_t now)
+{
+    (void)now;
+    if (!TOUCH_USART1_K230 || !TOUCH_LIGHT_CONFIGURED)
+        return false;
+    taskENTER_CRITICAL();
+    bool ok = capture_hardware_ready && !capture_command && !visual.pending && !tactile.pending && !tactile.active &&
+        (capture_status.state != CAP_READY || Visual_Complete(&visual,capture_status.seq,capture_status.epoch));
+    if (ok) {
+        capture_seq = seq;
+        capture_command = 1;
+        memset(&capture_status, 0, sizeof(capture_status));
+        capture_status.seq = seq;
+    }
+    taskEXIT_CRITICAL();
+    return ok;
+}
+void TouchTask_CaptureCancel(void)
+{
+    taskENTER_CRITICAL();
+    capture_command = 2;
+    capture_status.state = CAP_FAILED;
+    capture_status.error = CAP_CANCELLED;
+    taskEXIT_CRITICAL();
+}
+void TouchTask_CaptureStatus(uint32_t seq, capture_sequence_t *out)
+{
+    taskENTER_CRITICAL();
+    *out = capture_status;
+    taskEXIT_CRITICAL();
+    if (out->seq != seq) {
+        out->state = CAP_FAILED;
+        out->error = CAP_CANCELLED;
+    }
+}
+#if TOUCH_USART1_K230
+static bool capture_send(const uint8_t *data, size_t size)
+{
+    return Touch_BSP_SendPC((const char *)data, size);
+}
+/* Legacy K230 KEY/debug commands cannot change the lamp during a coordinated test. */
+static uint8_t reject_legacy_light(bool on)
+{
+    (void)on;
+    return 3;
+}
+ #endif
+static void capture_commands(void)
+{
+    taskENTER_CRITICAL();
+    if (capture_command == 2) {
+        Capture_Cancel(&capture, Touch_BSP_Light);
+        tactile.attempts=0;
+        visual.attempts=0; /* Explicit STOP/RESET grants a new bounded delivery attempt. */
+    }
+    else if (capture_command == 1)
+        (void)Capture_Begin(&capture, capture_seq, HAL_GetTick(), Touch_BSP_Light);
+    capture_command = 0;
+    taskEXIT_CRITICAL();
+}
+
+void TouchTask_GetTelemetry(touch_telemetry_t *out)
+{
+    taskENTER_CRITICAL();
+    *out = telemetry;
+    taskEXIT_CRITICAL();
+}
+#if !TOUCH_USART1_K230
 static uint32_t sent_force, sent_adc, last_output, last_status;
+#endif
 
 void TouchTask_GetStatus(touch_status_t *out)
 {
-    if (!out) return;
-    taskENTER_CRITICAL(); *out = g_touch_status; taskEXIT_CRITICAL();
+    if (!out)
+        return;
+    taskENTER_CRITICAL();
+    *out = g_touch_status;
+    taskEXIT_CRITICAL();
 }
 /* F/A/S 的字段、单位兼容用户原 Python 上位机。输出只取最新值，不回放积压数据。 */
+#if !TOUCH_USART1_K230
 static void output_pc(uint32_t now)
 {
-    if (now - last_output < TOUCH_OUTPUT_MS) return;
+    if (now - last_output < TOUCH_OUTPUT_MS)
+        return;
     last_output = now;
     char text[384];
     size_t used = 0;
@@ -32,46 +152,56 @@ static void output_pc(uint32_t now)
     if (force) {
         const touch_force_t *f = &current.force;
         n = snprintf(text + used, sizeof(text) - used,
-            "F,%lu,%ld,%ld,%ld,%ld,%ld,%ld,%s,%lu\r\n",
-            (unsigned long)f->timestamp_ms,
-            (long)Touch_Milli(f->values[0] - TOUCH_ZERO_FX_N),
-            (long)Touch_Milli(f->values[1] - TOUCH_ZERO_FY_N),
-            (long)Touch_Milli(f->values[2] - TOUCH_ZERO_FZ_N),
-            (long)Touch_Milli(f->values[3]), (long)Touch_Milli(f->values[4]),
-            (long)Touch_Milli(f->values[5]),
-            f->mode == TOUCH_FORCE_ACTIVE ? "ACTIVE" : "MODBUS", (unsigned long)f->count);
-        if (n < 0 || (size_t)n >= sizeof(text) - used) return;
+                     "F,%lu,%ld,%ld,%ld,%ld,%ld,%ld,%s,%lu\r\n",
+                     (unsigned long)f->timestamp_ms,
+                     (long)Touch_Milli(f->values[0] - TOUCH_ZERO_FX_N),
+                     (long)Touch_Milli(f->values[1] - TOUCH_ZERO_FY_N),
+                     (long)Touch_Milli(f->values[2] - TOUCH_ZERO_FZ_N),
+                     (long)Touch_Milli(f->values[3]), (long)Touch_Milli(f->values[4]),
+                     (long)Touch_Milli(f->values[5]),
+                     f->mode == TOUCH_FORCE_ACTIVE ? "ACTIVE" : "MODBUS", (unsigned long)f->count);
+        if (n < 0 || (size_t)n >= sizeof(text) - used)
+            return;
         used += (size_t)n;
     }
     if (adc) {
         n = snprintf(text + used, sizeof(text) - used, "A,%lu,%ld,%ld,%ld,%lu,%lu\r\n",
-            (unsigned long)current.adc_timestamp_ms,
-            (long)current.adxl.mg[0], (long)current.adxl.mg[1], (long)current.adxl.mg[2],
-            (unsigned long)current.adxl.rms_mg, (unsigned long)current.adc_blocks);
-        if (n < 0 || (size_t)n >= sizeof(text) - used) return;
+                     (unsigned long)current.adc_timestamp_ms,
+                     (long)current.adxl.mg[0], (long)current.adxl.mg[1], (long)current.adxl.mg[2],
+                     (unsigned long)current.adxl.rms_mg, (unsigned long)current.adc_blocks);
+        if (n < 0 || (size_t)n >= sizeof(text) - used)
+            return;
         used += (size_t)n;
     }
     if (status) {
         const touch_bsp_stats_t *s = &current.hardware;
         n = snprintf(text + used, sizeof(text) - used, "S,%lu,%lu,%lu,%lu,%lu,%lu,%lu\r\n",
-            (unsigned long)now, (unsigned long)current.force.count,
-            (unsigned long)current.crc_errors, (unsigned long)s->uart_errors,
-            (unsigned long)s->ring_overflows, (unsigned long)s->adc_overruns,
-            (unsigned long)s->adc_errors);
-        if (n < 0 || (size_t)n >= sizeof(text) - used) return;
+                     (unsigned long)now, (unsigned long)current.force.count,
+                     (unsigned long)current.crc_errors, (unsigned long)s->uart_errors,
+                     (unsigned long)s->ring_overflows, (unsigned long)s->adc_overruns,
+                     (unsigned long)s->adc_errors);
+        if (n < 0 || (size_t)n >= sizeof(text) - used)
+            return;
         used += (size_t)n;
     }
     if (Touch_BSP_SendPC(text, used)) {
-        if (force) sent_force = current.force.count;
-        if (adc) sent_adc = current.adc_blocks;
-        if (status) last_status = now;
+        if (force)
+            sent_force = current.force.count;
+        if (adc)
+            sent_adc = current.adc_blocks;
+        if (status)
+            last_status = now;
     }
 }
+#endif
 static void run(void *argument)
 {
     (void)argument;
-    if (!Touch_BSP_Start()) Error_Handler();
+    if (!Touch_BSP_Start())
+        Error_Handler();
+    capture_hardware_ready = true;
     uint32_t start = HAL_GetTick(), last_poll = start;
+    features.output_ms = features.window_ms = start;
     touch_adc_block_t block;
     for (;;) {
         uint32_t now = HAL_GetTick();
@@ -79,14 +209,54 @@ static void run(void *argument)
             parser.used = 0;
             parser.latest.valid = false;
         }
+        capture_commands();
+#if TOUCH_USART1_K230
+        now = HAL_GetTick();
+        Capture_Tick(&capture, now, Touch_BSP_Light, capture_send);
+        if (visual_ack_pending && capture_send(visual_ack,sizeof(visual_ack))) visual_ack_pending=false;
+        uint8_t kb;
+        for (unsigned budget = 0; budget < 64; budget++) {
+            if (visual_ack_pending) break;
+            if (k230.pending) {
+                if (Touch_BSP_SendPC((const char *)k230.ack, sizeof(k230.ack)))
+                    k230.pending = false;
+                else
+                    break;
+            }
+            if (!Touch_BSP_ReadK230(&kb))
+                break;
+            K230_Feed(&k230, kb, now, reject_legacy_light);
+            if (k230.visual_pending) {
+                k230.visual_pending=false;
+                taskENTER_CRITICAL();
+                uint8_t status=Visual_Accept(&visual,k230.visual_payload,capture.seq,capture.epoch,
+                    !capture_command && capture.state==CAP_READY && !capture.light);
+                taskEXIT_CRITICAL();
+                visual_ack[0]=0xaa; visual_ack[1]=0x55; visual_ack[2]=0x34; visual_ack[3]=9;
+                memcpy(visual_ack+4,k230.visual_payload,8); visual_ack[12]=status;
+                uint8_t sum=0; for(unsigned j=2;j<13;j++) sum+=visual_ack[j];
+                visual_ack[13]=sum; visual_ack_pending=true;
+            }
+            if (k230.capture_pending) {
+                k230.capture_pending = false;
+                Capture_Done(&capture, k230.capture_payload, 9, HAL_GetTick(), Touch_BSP_Light);
+            }
+        }
+#endif
+        taskENTER_CRITICAL();
+        if (!capture_command)
+            capture_status = capture;
+        taskEXIT_CRITICAL();
         uint8_t byte;
         /* 有界工作量，不让坏帧/连续发送占满 CPU；每毫秒可消费512字节。 */
         for (unsigned i = 0; i < 512 && Touch_BSP_ReadByte(&byte); i++)
-            (void)Touch_Parse(&parser, byte, now);
+            if (Touch_Parse(&parser, byte, now))
+                TouchFeatures_Force(&features, &parser.latest);
         for (unsigned i = 0; i < 4 && Touch_BSP_ReadBlock(&block); i++) {
             if (Touch_ProcessADC(block.samples, TOUCH_BLOCK_FRAMES, &current.adxl)) {
                 current.adc_timestamp_ms = block.timestamp_ms;
                 current.adc_blocks = block.sequence;
+                TouchFeatures_ADC(&features, &current.adxl, block.timestamp_ms);
             }
         }
         now = HAL_GetTick(); /* DMA 回调可能在本轮处理期间发布更晚的块时间戳。 */
@@ -99,19 +269,54 @@ static void run(void *argument)
         /* 先被动监听 2s；没有新鲜主动帧才询问 Modbus，掉线后也可重新发现。 */
         if (now - start >= 2000U && now - last_poll >= 10U &&
             !(current.force_online && current.force.mode == TOUCH_FORCE_ACTIVE)) {
-            if (Touch_BSP_RequestForce()) last_poll = now;
+            if (Touch_BSP_RequestForce())
+                last_poll = now;
         }
-        taskENTER_CRITICAL(); g_touch_status = current; taskEXIT_CRITICAL();
+        taskENTER_CRITICAL();
+        g_touch_status = current;
+        taskEXIT_CRITICAL();
+        touch_telemetry_t sample;
+        if (TouchFeatures_Tick(&features, now, &sample)) {
+#if TOUCH_USART1_K230
+            sample.light = capture.light;
+#endif
+            taskENTER_CRITICAL();
+            telemetry = sample;
+            taskEXIT_CRITICAL();
+        }
+#if !TOUCH_USART1_K230
         output_pc(now);
+#endif
         osDelay(1);
     }
 }
 void TouchTask_Init(void)
 {
     const osThreadAttr_t attr = {
-        .name = "TouchTask", .cb_mem = &task_cb, .cb_size = sizeof(task_cb),
-        .stack_mem = task_stack, .stack_size = sizeof(task_stack),
-        .priority = osPriorityNormal1 /* 低于电机 AboveNormal1，高于远程 Normal。 */
+        .name = "TouchTask", .cb_mem = &task_cb, .cb_size = sizeof(task_cb), .stack_mem = task_stack, .stack_size = sizeof(task_stack), .priority = osPriorityNormal1 /* 低于电机 AboveNormal1，高于远程 Normal。 */
     };
-    if (!osThreadNew(run, NULL, &attr)) Error_Handler();
+    if (!osThreadNew(run, NULL, &attr))
+        Error_Handler();
+}
+
+/** @brief 只在采图成功后的本轮运动中统计，结束或停止时冻结记录。 */
+void TouchTask_TactileObserve(uint32_t seq,uint8_t state,uint8_t mode,uint8_t stage,uint32_t now)
+{
+    taskENTER_CRITICAL();
+    if(!tactile.active && !tactile.pending && state==RC_RUNNING && capture_status.state==CAP_READY &&
+       capture_status.seq==seq && !(tactile.seq==seq && tactile.epoch==capture_status.epoch))
+        (void)Tactile_Begin(&tactile,seq,capture_status.epoch,mode,now);
+    if(tactile.active){
+        if(state!=RC_RUNNING || seq!=tactile.seq)Tactile_End(&tactile,state==RC_DONE?0:1,now);
+        else {Tactile_Stage(&tactile,stage,now);Tactile_Sample(&tactile,&telemetry,now);}
+    }
+    taskEXIT_CRITICAL();
+}
+bool TouchTask_TactileTake(uint32_t now,uint8_t out[TACTILE_RESULT_SIZE])
+{
+    taskENTER_CRITICAL();bool ok=Tactile_Take(&tactile,now,out);taskEXIT_CRITICAL();return ok;
+}
+void TouchTask_TactileAck(const uint8_t ack[9])
+{
+    taskENTER_CRITICAL();Tactile_Ack(&tactile,ack);taskEXIT_CRITICAL();
 }

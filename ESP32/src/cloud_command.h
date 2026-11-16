@@ -99,7 +99,8 @@
 // ---- 结构尺寸（POD，供 FreeRTOS 队列按值拷贝）----
 #define CLOUD_CMD_ID_LEN     40   // 云端命令 id（Mongo _id 24 位十六进制，留足余量）
 #define CLOUD_CMD_NAME_LEN   12   // 命令名（arm/start/stop/reset/mode_press/mode_rub/mode_slide）
-#define CLOUD_CMD_RESULT_LEN 12   // 回执 result
+#define CLOUD_CMD_RESULT_LEN 24   // 包含 capture_timeout / not_stationary 及字符串终止符
+static_assert(CLOUD_CMD_RESULT_LEN >= sizeof("capture_timeout"), "Cloud result buffer too small");
 #define CLOUD_CMD_QUEUE_LEN  8    // 命令队列深度（云任务 → 主 loop）
 #define CLOUD_CMD_ACKQ_LEN   32    // 回执队列深度（主 loop → 云任务）
 

@@ -1,7 +1,9 @@
 #include "esp_uart.h"
 #include "usart.h"
+#include "touch_bsp.h"
+#include "remote_protocol.h"
 #include <string.h>
-static uint8_t rx, ring[256], tx[32];
+static uint8_t rx, ring[256], tx[RC_MAX_PAYLOAD + 5U];
 static volatile uint32_t head, tail;
 static volatile bool broken, busy;
 bool ESP_UART_Start(void)
@@ -13,6 +15,8 @@ bool ESP_UART_Start(void)
 }
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *h)
 {
+    /* USART1 uses single-byte interrupts too; dispatch before the USART3 filter. */
+    Touch_UART_RxComplete(h);
     if (h != &huart3)
         return;
     if (head - tail >= sizeof(ring))

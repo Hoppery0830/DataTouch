@@ -1,3 +1,7 @@
+/**
+ * @file touch_bsp.c
+ * @brief 管理六轴力串口、ADXL335 ADC/DMA 和 USART1 数据收发。
+ */
 #include "touch_bsp.h"
 #include "adc.h"
 #include "usart.h"
@@ -19,8 +23,56 @@ static volatile touch_bsp_stats_t stats;
 volatile touch_io_debug_t g_touch_io_debug;
 volatile touch_adc_debug_t g_touch_adc_debug;
 static uint8_t pc_tx[384];
+#if TOUCH_USART1_K230
+static uint8_t k_rx, k_ring[128];
+static volatile uint32_t k_head, k_tail;
+#endif
+uint8_t Touch_BSP_Light(bool on)
+{
+#if TOUCH_LIGHT_CONFIGURED
+    HAL_GPIO_WritePin(TOUCH_LIGHT_PORT, TOUCH_LIGHT_PIN, on ? TOUCH_LIGHT_ACTIVE : (TOUCH_LIGHT_ACTIVE == GPIO_PIN_SET ? GPIO_PIN_RESET : GPIO_PIN_SET));
+    return 0;
+#else
+    (void)on;
+    return 2;
+#endif
+}
+void Touch_UART_RxComplete(UART_HandleTypeDef *h)
+{
+#if TOUCH_USART1_K230
+    if (h != &huart1 || pc_broken)
+        return;
+    if (k_head - k_tail >= sizeof(k_ring)) {
+        pc_broken = true;
+        stats.ring_overflows++;
+        return;
+    }
+    k_ring[k_head % sizeof(k_ring)] = k_rx;
+    __DMB();
+    k_head++;
+    if (HAL_UART_Receive_IT(h, &k_rx, 1) != HAL_OK)
+        pc_broken = true;
+#else
+    (void)h;
+#endif
+}
+bool Touch_BSP_ReadK230(uint8_t *b)
+{
+#if TOUCH_USART1_K230
+    if (pc_broken || k_head == k_tail)
+        return false;
+    __DMB();
+    *b = k_ring[k_tail % sizeof(k_ring)];
+    __DMB();
+    k_tail++;
+    return true;
+#else
+    (void)b;
+    return false;
+#endif
+}
 /* 静态发送缓冲，HAL_UART_Transmit_IT 返回后仍有效；自动换向 RS485 模块。 */
-static uint8_t request_all[] = {1, 3, 0, 3, 0, 12, 0xb5, 0xcf};
+static uint8_t request_all[] = { 1, 3, 0, 3, 0, 12, 0xb5, 0xcf };
 
 static bool configure_dma(DMA_HandleTypeDef *d, DMA_Stream_TypeDef *instance,
                           uint32_t channel, uint32_t direction, uint32_t align, uint32_t mode)
@@ -51,6 +103,16 @@ static bool start_adc(void)
 }
 bool Touch_BSP_Start(void)
 {
+#if TOUCH_LIGHT_CONFIGURED
+    TOUCH_LIGHT_CLOCK_ENABLE();
+    Touch_BSP_Light(false);
+    GPIO_InitTypeDef light_gpio = { 0 };
+    light_gpio.Pin = TOUCH_LIGHT_PIN;
+    light_gpio.Mode = GPIO_MODE_OUTPUT_PP;
+    light_gpio.Pull = GPIO_NOPULL;
+    light_gpio.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(TOUCH_LIGHT_PORT, &light_gpio);
+#endif
     /* 在所有 MX_* 初始化之后调用。板型、时钟树和电机 TIM2 保持原工程配置。
        自有 DMA/IRQ 不放入 CubeMX 生成区，见本目录 README 的资源所有权约束。 */
     __HAL_RCC_DMA1_CLK_ENABLE();
@@ -58,15 +120,19 @@ bool Touch_BSP_Start(void)
     __HAL_RCC_TIM3_CLK_ENABLE();
     huart4.Init.BaudRate = TOUCH_SENSOR_BAUD;
     huart1.Init.BaudRate = TOUCH_PC_BAUD;
-    if (HAL_UART_Init(&huart4) != HAL_OK || HAL_UART_Init(&huart1) != HAL_OK) return false;
+    if (HAL_UART_Init(&huart4) != HAL_OK || HAL_UART_Init(&huart1) != HAL_OK)
+        return false;
     if (!configure_dma(&force_dma, DMA1_Stream2, DMA_CHANNEL_4, DMA_PERIPH_TO_MEMORY,
-                       DMA_PDATAALIGN_BYTE, DMA_CIRCULAR)) return false;
+                       DMA_PDATAALIGN_BYTE, DMA_CIRCULAR))
+        return false;
     __HAL_LINKDMA(&huart4, hdmarx, force_dma);
     if (!configure_dma(&pc_dma, DMA2_Stream7, DMA_CHANNEL_4, DMA_MEMORY_TO_PERIPH,
-                       DMA_PDATAALIGN_BYTE, DMA_NORMAL)) return false;
+                       DMA_PDATAALIGN_BYTE, DMA_NORMAL))
+        return false;
     __HAL_LINKDMA(&huart1, hdmatx, pc_dma);
     if (!configure_dma(&adc_dma, DMA2_Stream0, DMA_CHANNEL_0, DMA_PERIPH_TO_MEMORY,
-                       DMA_PDATAALIGN_HALFWORD, DMA_CIRCULAR)) return false;
+                       DMA_PDATAALIGN_HALFWORD, DMA_CIRCULAR))
+        return false;
     __HAL_LINKDMA(&hadc1, DMA_Handle, adc_dma);
 
     /* 168MHz SYSCLK 下 APB2=84MHz，ADC=21MHz，三通道 144+12 周期约22.3us。 */
@@ -79,43 +145,61 @@ bool Touch_BSP_Start(void)
     hadc1.Init.NbrOfConversion = 3;
     hadc1.Init.DMAContinuousRequests = ENABLE;
     hadc1.Init.EOCSelection = ADC_EOC_SEQ_CONV;
-    if (HAL_ADC_Init(&hadc1) != HAL_OK) return false;
-    ADC_ChannelConfTypeDef c = {0};
+    if (HAL_ADC_Init(&hadc1) != HAL_OK)
+        return false;
+    ADC_ChannelConfTypeDef c = { 0 };
     c.SamplingTime = ADC_SAMPLETIME_144CYCLES;
     for (uint32_t a = 0; a < 3; a++) {
         c.Channel = ADC_CHANNEL_10 + a;
         c.Rank = a + 1;
-        if (HAL_ADC_ConfigChannel(&hadc1, &c) != HAL_OK) return false;
+        if (HAL_ADC_ConfigChannel(&hadc1, &c) != HAL_OK)
+            return false;
     }
     uint32_t timer_hz = HAL_RCC_GetPCLK1Freq();
-    if ((RCC->CFGR & RCC_CFGR_PPRE1) != 0) timer_hz *= 2;
-    if (timer_hz % 1000000U != 0 || 1000000U % TOUCH_SAMPLE_HZ != 0) return false;
+    if ((RCC->CFGR & RCC_CFGR_PPRE1) != 0)
+        timer_hz *= 2;
+    if (timer_hz % 1000000U != 0 || 1000000U % TOUCH_SAMPLE_HZ != 0)
+        return false;
     sample_timer.Instance = TIM3;
     sample_timer.Init.Prescaler = timer_hz / 1000000U - 1;
     sample_timer.Init.CounterMode = TIM_COUNTERMODE_UP;
     sample_timer.Init.Period = 1000000U / TOUCH_SAMPLE_HZ - 1;
     sample_timer.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
     sample_timer.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-    if (HAL_TIM_Base_Init(&sample_timer) != HAL_OK) return false;
-    TIM_MasterConfigTypeDef master = {0};
+    if (HAL_TIM_Base_Init(&sample_timer) != HAL_OK)
+        return false;
+    TIM_MasterConfigTypeDef master = { 0 };
     master.MasterOutputTrigger = TIM_TRGO_UPDATE;
     master.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-    if (HAL_TIMEx_MasterConfigSynchronization(&sample_timer, &master) != HAL_OK) return false;
-    irq(DMA1_Stream2_IRQn); irq(UART4_IRQn);
-    irq(DMA2_Stream0_IRQn); irq(ADC_IRQn);
-    irq(DMA2_Stream7_IRQn); irq(USART1_IRQn);
-    if (HAL_UARTEx_ReceiveToIdle_DMA(&huart4, rx_dma, sizeof(rx_dma)) != HAL_OK) return false;
+    if (HAL_TIMEx_MasterConfigSynchronization(&sample_timer, &master) != HAL_OK)
+        return false;
+    irq(DMA1_Stream2_IRQn);
+    irq(UART4_IRQn);
+    irq(DMA2_Stream0_IRQn);
+    irq(ADC_IRQn);
+    irq(DMA2_Stream7_IRQn);
+    irq(USART1_IRQn);
+    if (HAL_UARTEx_ReceiveToIdle_DMA(&huart4, rx_dma, sizeof(rx_dma)) != HAL_OK)
+        return false;
+#if TOUCH_USART1_K230
+    if (HAL_UART_Receive_IT(&huart1, &k_rx, 1) != HAL_OK)
+        return false;
+#endif
     return start_adc();
 }
 void Touch_UART_RxEvent(UART_HandleTypeDef *h)
 {
-    if (h != &huart4 || force_broken) return;
+    if (h != &huart4 || force_broken)
+        return;
     /* UART4 IDLE 与 DMA HT/TC 使用相同抢占优先级；读当前 NDTR 避免重复旧 Size。 */
     uint16_t pos = (uint16_t)(RX_DMA_SIZE - __HAL_DMA_GET_COUNTER(&force_dma));
-    if (pos == RX_DMA_SIZE) pos = 0;
+    if (pos == RX_DMA_SIZE)
+        pos = 0;
     while (rx_pos != pos) {
         if ((uint32_t)(rx_head - rx_tail) == RX_RING_SIZE) {
-            stats.ring_overflows++; force_broken = true; break;
+            stats.ring_overflows++;
+            force_broken = true;
+            break;
         }
         uint8_t byte = rx_dma[rx_pos];
         rx_ring[rx_head % RX_RING_SIZE] = byte;
@@ -124,45 +208,67 @@ void Touch_UART_RxEvent(UART_HandleTypeDef *h)
             g_touch_io_debug.first_rx_size++;
         }
         g_touch_io_debug.force_rx_bytes++;
-        __DMB(); rx_head++;
+        __DMB();
+        rx_head++;
         rx_pos = (uint16_t)((rx_pos + 1U) % RX_DMA_SIZE);
     }
 }
 bool Touch_BSP_ReadByte(uint8_t *b)
 {
-    if (force_broken || rx_tail == rx_head) return false;
-    __DMB(); *b = rx_ring[rx_tail % RX_RING_SIZE];
-    __DMB(); rx_tail++;
+    if (force_broken || rx_tail == rx_head)
+        return false;
+    __DMB();
+    *b = rx_ring[rx_tail % RX_RING_SIZE];
+    __DMB();
+    rx_tail++;
     return true;
 }
 static void adc_ready(unsigned half)
 {
-    if (adc_broken) return;
+    if (adc_broken)
+        return;
     sequence++;
     /* 迟到的中断不能读取 DMA 已在覆写的半区。队列保存完整副本而非裸指针。 */
     uint32_t remaining = __HAL_DMA_GET_COUNTER(&adc_dma);
     unsigned active = (remaining > TOUCH_BLOCK_FRAMES * 3 || remaining == 0) ? 0U : 1U;
     if (active == half || (uint32_t)(block_head - block_tail) == BLOCK_QUEUE_SIZE) {
-        stats.adc_overruns++; return;
+        stats.adc_overruns++;
+        return;
     }
     touch_adc_block_t *b = &blocks[block_head % BLOCK_QUEUE_SIZE];
     b->timestamp_ms = HAL_GetTick();
     b->sequence = sequence;
     memcpy(b->samples, adc_samples + half * TOUCH_BLOCK_FRAMES * 3, sizeof(b->samples));
-    __DMB(); block_head++;
+    __DMB();
+    block_head++;
 }
-void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *h) { if (h == &hadc1) adc_ready(0); }
-void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *h) { if (h == &hadc1) adc_ready(1); }
+void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *h)
+{
+    if (h == &hadc1)
+        adc_ready(0);
+}
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *h)
+{
+    if (h == &hadc1)
+        adc_ready(1);
+}
 void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *h)
 {
-    if (h == &hadc1) { stats.adc_errors++; adc_broken = true; }
+    if (h == &hadc1) {
+        stats.adc_errors++;
+        adc_broken = true;
+    }
 }
 bool Touch_BSP_ReadBlock(touch_adc_block_t *b)
 {
-    if (adc_broken || block_head == block_tail) return false;
-    __DMB(); *b = blocks[block_tail % BLOCK_QUEUE_SIZE];
-    __DMB(); block_tail++;
-    for (unsigned i = 0; i < 6; i++) g_touch_adc_debug.dma_first[i] = b->samples[i];
+    if (adc_broken || block_head == block_tail)
+        return false;
+    __DMB();
+    *b = blocks[block_tail % BLOCK_QUEUE_SIZE];
+    __DMB();
+    block_tail++;
+    for (unsigned i = 0; i < 6; i++)
+        g_touch_adc_debug.dma_first[i] = b->samples[i];
     g_touch_adc_debug.block_sequence = b->sequence;
     return true;
 }
@@ -177,11 +283,13 @@ void Touch_UART_Error(UART_HandleTypeDef *h)
 {
     if (h == &huart4) {
         g_touch_io_debug.force_last_error = h->ErrorCode;
-        stats.uart_errors++; force_broken = true;
+        stats.uart_errors++;
+        force_broken = true;
     }
     if (h == &huart1) {
         g_touch_io_debug.pc_last_error = h->ErrorCode;
-        stats.pc_errors++; pc_broken = true;
+        stats.pc_errors++;
+        pc_broken = true;
     }
 }
 bool Touch_BSP_RequestForce(void)
@@ -193,12 +301,20 @@ bool Touch_BSP_RequestForce(void)
 }
 bool Touch_BSP_SendPC(const char *data, size_t size)
 {
-    if (!size) return true;
-    if (size > sizeof(pc_tx) || pc_busy || pc_broken) { stats.pc_drops++; return false; }
+    if (!size)
+        return true;
+    if (size > sizeof(pc_tx) || pc_busy || pc_broken) {
+        stats.pc_drops++;
+        return false;
+    }
     memcpy(pc_tx, data, size);
     pc_busy = true;
     if (HAL_UART_Transmit_DMA(&huart1, pc_tx, (uint16_t)size) != HAL_OK) {
-        pc_busy = false; pc_broken = true; stats.pc_errors++; stats.pc_drops++; return false;
+        pc_busy = false;
+        pc_broken = true;
+        stats.pc_errors++;
+        stats.pc_drops++;
+        return false;
     }
     g_touch_io_debug.pc_tx_started++;
     return true;
@@ -206,13 +322,15 @@ bool Touch_BSP_SendPC(const char *data, size_t size)
 bool Touch_BSP_Recover(uint32_t now)
 {
     static uint32_t last;
-    if (now - last < 100U) return false;
+    if (now - last < 100U)
+        return false;
     last = now;
     bool reset_parser = false;
     if (force_broken) {
         reset_parser = true;
         if (HAL_UART_Abort(&huart4) == HAL_OK) {
-            rx_head = rx_tail = 0; rx_pos = 0;
+            rx_head = rx_tail = 0;
+            rx_pos = 0;
             force_broken = false;
             if (HAL_UARTEx_ReceiveToIdle_DMA(&huart4, rx_dma, sizeof(rx_dma)) != HAL_OK)
                 force_broken = true;
@@ -223,17 +341,25 @@ bool Touch_BSP_Recover(uint32_t now)
         if (HAL_ADC_Stop_DMA(&hadc1) == HAL_OK) {
             block_head = block_tail = 0;
             adc_broken = false;
-            if (!start_adc()) adc_broken = true;
+            if (!start_adc())
+                adc_broken = true;
         }
     }
     if (pc_broken && HAL_UART_Abort(&huart1) == HAL_OK) {
-        pc_busy = false; pc_broken = false;
+        pc_busy = false;
+        pc_broken = false;
+#if TOUCH_USART1_K230
+        k_head = k_tail = 0;
+        if (HAL_UART_Receive_IT(&huart1, &k_rx, 1) != HAL_OK)
+            pc_broken = true;
+#endif
     }
     return reset_parser;
 }
 void Touch_BSP_GetStats(touch_bsp_stats_t *out)
 {
-    uint32_t mask = __get_PRIMASK(); __disable_irq();
+    uint32_t mask = __get_PRIMASK();
+    __disable_irq();
     *out = stats;
     __set_PRIMASK(mask);
     /* 100ms 一次，仅读配置/NDTR；不读 DR 或 SR，避免干扰 UART 清标志序列。 */
@@ -277,9 +403,27 @@ void Touch_BSP_GetStats(touch_bsp_stats_t *out)
     }
 }
 /* 独占入口：CubeMX 不要重复生成这些 IRQ；所有 IRQ 均不解析/打印/阻塞等待。 */
-void UART4_IRQHandler(void) { HAL_UART_IRQHandler(&huart4); }
-void USART1_IRQHandler(void) { HAL_UART_IRQHandler(&huart1); }
-void DMA1_Stream2_IRQHandler(void) { HAL_DMA_IRQHandler(&force_dma); }
-void DMA2_Stream0_IRQHandler(void) { HAL_DMA_IRQHandler(&adc_dma); }
-void DMA2_Stream7_IRQHandler(void) { HAL_DMA_IRQHandler(&pc_dma); }
-void ADC_IRQHandler(void) { HAL_ADC_IRQHandler(&hadc1); }
+void UART4_IRQHandler(void)
+{
+    HAL_UART_IRQHandler(&huart4);
+}
+void USART1_IRQHandler(void)
+{
+    HAL_UART_IRQHandler(&huart1);
+}
+void DMA1_Stream2_IRQHandler(void)
+{
+    HAL_DMA_IRQHandler(&force_dma);
+}
+void DMA2_Stream0_IRQHandler(void)
+{
+    HAL_DMA_IRQHandler(&adc_dma);
+}
+void DMA2_Stream7_IRQHandler(void)
+{
+    HAL_DMA_IRQHandler(&pc_dma);
+}
+void ADC_IRQHandler(void)
+{
+    HAL_ADC_IRQHandler(&hadc1);
+}

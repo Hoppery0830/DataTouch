@@ -80,6 +80,38 @@ exports.main = async (event, context) => {
     return fail(4002, "deviceId 过长（最多 " + DEVICE_ID_MAX_LEN + " 个字符）");
   }
 
+  if (ev.action === "telemetry") {
+    try {
+      const got = await db.collection("device_telemetry").where({deviceId}).limit(1).get();
+      const telemetry = got.data && got.data[0];
+      if (!telemetry) return {ok:true,telemetry:null,serverTime:Date.now()};
+      const age = Date.now()-new Date(telemetry.sampleAt).getTime();
+      telemetry.fresh = Number.isFinite(age) && age>=0 && age<15000;
+      return {ok:true,telemetry,serverTime:Date.now()};
+    } catch(e) {return fail(5000,"读取 device_telemetry 失败，请确认集合已建立："+(e.message||e.errMsg));}
+  }
+
+  if (ev.action === "tactileResults") {
+    const offset=ev.offset===undefined?0:ev.offset;
+    if(!Number.isInteger(offset)||offset<0||offset>10000)return fail(4001,"invalid offset");
+    try {
+      const got=await db.collection("tactile_results").where({deviceId}).orderBy("receivedAt","desc").skip(offset).limit(20).get();
+      const rows=await Promise.all((got.data||[]).map(async row=>{
+        const vision=await db.collection("visual_results").where({deviceId,experimentToken:row.experimentToken}).limit(1).get();
+        return {...row,visual:vision.data&&vision.data[0]||null};
+      }));
+      return {ok:true,rows};
+    } catch(e){return fail(5000,"读取触觉结果失败："+(e.message||e.errMsg));}
+  }
+  if (ev.action === "visualResults") {
+    const offset=ev.offset===undefined?0:ev.offset;
+    if(!Number.isInteger(offset)||offset<0||offset>10000)return fail(4001,"invalid offset");
+    try {
+      const got=await db.collection("visual_results").where({deviceId})
+        .orderBy("receivedAt","desc").skip(offset).limit(20).get();
+      return {ok:true,rows:got.data||[]};
+    } catch(e) {return fail(5000,"读取视觉结果失败："+(e.message||e.errMsg));}
+  }
   // Read authoritative live state through the existing cloud entry point.
   if (ev.action === "status") {
     try {

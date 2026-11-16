@@ -1,0 +1,16 @@
+<view class="page">
+  <view class="title">视觉实验结果</view>
+  <view class="hint">设备 {{deviceId}} · 每次实验一条已保存结果</view>
+  <view class="hint">U_curve 表示纹理特征曲线与参考曲线的偏离程度，数值越小越接近参考，不是舒适度评分。</view>
+  <view class="error" wx:if="{{error}}">{{error}}<button bindtap="retry" size="mini">重试</button></view>
+  <view class="card" wx:for="{{rows}}" wx:key="_id">
+    <view class="label">纹理偏离指标 U_curve</view>
+    <view class="value">{{item.valueText}}</view>
+    <view class="token">实验 {{item.experimentToken}}</view>
+    <view class="hint">入库时间 {{item.timeText}}</view>
+    <view class="hint">算法 {{item.algorithm}} · 已保存</view>
+  </view>
+  <view class="empty" wx:if="{{!loading && !rows.length && !error}}">暂无已保存的视觉结果。实验采图后需等待计算和上传完成；采图成功不代表指标已入库。</view>
+  <view class="hint" wx:if="{{loading}}">正在加载…</view>
+  <view class="hint" wx:if="{{more}}">上拉查看更多</view>
+</view>

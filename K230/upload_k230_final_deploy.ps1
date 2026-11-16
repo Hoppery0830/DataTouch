@@ -18,6 +18,7 @@ $selected = @(
     'stm32_link.py',
     'data_touch/__init__.py',
     'data_touch/app.py',
+    'data_touch/capture_service.py',
     'data_touch/camera.py',
     'data_touch/config.py',
     'data_touch/key.py',

@@ -1,3 +1,7 @@
+/**
+ * @file remote_task.h
+ * @brief 收发 ESP32 控制帧，桥接 MotorTask 命令与结果队列。
+ */
 /** @brief 通信任务：收发协议帧，通过静态队列连接 MotorTask。 */
 #pragma once
 #include "remote_protocol.h"

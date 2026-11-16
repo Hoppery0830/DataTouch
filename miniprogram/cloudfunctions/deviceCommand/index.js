@@ -1,3 +1,4 @@
+const telemetryCodec = require("./telemetry.js");
 // cloudfunctions/deviceCommand/index.js
 // ============================================================
 // deviceCommand —— 设备侧「远程控制命令」拉取 / 确认入口
@@ -168,7 +169,10 @@ function isCollectionMissing(e) {
 }
 
 /**
- * 主入口
+ * @brief 鉴权后处理设备轮询及命令回执，轮询时同步更新状态和遥测。
+ * @param event 设备请求事件，可含 HTTP 请求体。
+ * @param context 云函数运行上下文。
+ * @return 命令轮询、回执或错误响应。
  */
 exports.main = async (event, context) => {
   const ev = normalizeEvent(event);
@@ -205,6 +209,12 @@ exports.main = async (event, context) => {
   const now = new Date();
 
   try {
+    if (action === "tactileresult") {
+      return await require("./tactile").save(db,deviceId,payload.tactile);
+    }
+    if (action === "visualresult") {
+      return await require("./visual").save(db,deviceId,payload.visual);
+    }
     // ==========================================================
     // action = poll：设备轮询拉取待执行命令
     // ==========================================================
@@ -213,12 +223,25 @@ exports.main = async (event, context) => {
       if (payload.status && /^[A-Za-z0-9_-]{1,64}$/.test(deviceId)) {
         const st = payload.status;
         const valid = [st.state,st.mode,st.stage,st.online,st.fault].every(Number.isInteger) &&
-          st.state >= 0 && st.state <= 6 && (st.mode === 255 || (st.mode >= 0 && st.mode <= 2)) &&
-          st.stage >= 0 && st.stage <= 7 && st.online >= 0 && st.online <= 7 && st.fault >= 0 && st.fault <= 7;
+          st.state >= 0 && st.state <= 7 && (st.mode === 255 || (st.mode >= 0 && st.mode <= 2)) &&
+          st.stage >= 0 && st.stage <= 11 && st.online >= 0 && st.online <= 7 && st.fault >= 0 && st.fault <= 7;
         if (valid) try { await db.collection("device_status").doc(deviceId).set({data:{
           deviceId, alive: st.alive === true, state: st.state, mode: st.mode,
           stage: st.stage, online: st.online, fault: st.fault, updatedAt: now
         }}); } catch(e) { console.warn("device_status 写入失败（命令通道继续）：", e.message); }
+      }
+      // Telemetry failure never blocks STOP/RESET or command receipts.
+      let telemetryError = "";
+      if (payload.telemetry && /^[A-Za-z0-9_-]{1,64}$/.test(deviceId)) {
+        const packet = telemetryCodec.validate(payload.telemetry);
+        if (!packet) telemetryError = "invalid telemetry";
+        else try {
+          const collection = db.collection("device_telemetry");
+          const got = await collection.where({deviceId}).limit(1).get();
+          const data = telemetryCodec.merge(got.data && got.data[0], packet, deviceId, now);
+          await collection.doc(deviceId).set({data});
+        } catch(e) { telemetryError = e.message || "device_telemetry write failed"; }
+        if (telemetryError) console.warn("[telemetry]",telemetryError);
       }
       // Missing final receipt is an unknown outcome, never a reason to replay START.
       await db.collection(COLLECTION).where({deviceId, state: _.in(["sent","accepted"]),
@@ -303,6 +326,7 @@ exports.main = async (event, context) => {
       return {
         ok: true,
         commands,
+        telemetryError,
         serverTime: Date.now(),   // 毫秒时间戳，便于设备校准/判断延迟
         insecure,
       };
@@ -322,7 +346,7 @@ exports.main = async (event, context) => {
         : String(payload.result).slice(0, 500);
 
       // ★ 条件里同时带 deviceId：防止 A 设备确认（甚至篡改）B 设备的命令
-      const knownResults = ["accepted","ok","busy","invalid","not_ready","fault","cancelled","timeout","offline","unknown","expired"];
+      const knownResults = ["accepted","ok","busy","invalid","not_ready","fault","cancelled","capture_failed","capture_timeout","not_stationary","light_failed","timeout","offline","unknown","expired"];
       if (!knownResults.includes(result)) return fail(4001,"未知回执结果");
       const state = result === "accepted" ? "accepted" : result === "ok" ? "done" :
         result === "cancelled" ? "cancelled" : result === "timeout" ? "unknown" : "failed";

@@ -28,7 +28,7 @@
 #endif
 #define APP_SELFTEST_AXIS MOTOR_X
 #define APP_SELFTEST_TARGET 2.0f /* X/Z in mm, Yaw in degrees; 0.5mm is hard to see */
-#define APP_SELFTEST_SPEED 1.0f  /* X/Z in mm/s, Yaw in deg/s; start slow */
+#define APP_SELFTEST_SPEED 1.0f /* X/Z in mm/s, Yaw in deg/s; start slow */
 
 /* 上电演示：只执行一次。当前位置设零，不执行机械寻零。 */
 #ifndef APP_MOTOR_AUTOSTART

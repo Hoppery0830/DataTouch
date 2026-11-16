@@ -5,7 +5,7 @@ import argparse, os, subprocess
 from pathlib import Path
 p=argparse.ArgumentParser();p.add_argument('--cc',default='gcc');p.add_argument('--selftest-disabled',action='store_true');p.add_argument('--startup-mode',choices=['ACTION_PRESS','ACTION_RUB','ACTION_SLIDE'],default='ACTION_PRESS');p.add_argument('--startup-disabled',action='store_true');args=p.parse_args()
 r=Path(__file__).resolve().parents[1];out=r/'build'/'host-tests';out.mkdir(parents=True,exist_ok=True)
-inc=['source/module/remote','tests/stubs','source/config','source/bsp/uart','source/module/motor','source/module/buzzer','source/bsp/buzzer','source/task/Motor_Task']
+inc=['source/module/touch','source/module/remote','tests/stubs','source/config','source/bsp/uart','source/module/motor','source/module/buzzer','source/bsp/buzzer','source/task/Motor_Task']
 src=['source/module/remote/remote_protocol.c','source/module/remote/remote_control.c','tests/test_framework.c','source/bsp/uart/uart_bsp.c','source/module/motor/emm_protocol.c','source/module/motor/motor.c','source/task/Motor_Task/motor_config.c','source/task/Motor_Task/motor_action.c','source/task/Motor_Task/motor_action_handle.c','source/task/Motor_Task/axis_control_drv.c','source/task/Motor_Task/motor_selftest.c','source/task/Motor_Task/motor_startup.c','source/task/Motor_Task/motor_state_machine.c','source/task/Motor_Task/motor_handle.c','source/module/buzzer/buzzer.c']
 env=os.environ.copy()
 if Path(args.cc).is_absolute():env['PATH']=str(Path(args.cc).parent)+os.pathsep+env['PATH']

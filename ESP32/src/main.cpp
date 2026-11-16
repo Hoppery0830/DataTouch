@@ -23,6 +23,9 @@
 #include "protocol.h"
 #include "cloud_upload.h"   // 设备上云: HTTPS 上传实验记录 (新增模块; 不改动现有逻辑)
 #include "remote_link.h"
+#include "visual_result.h"
+#include "tactile_result.h"
+#include "telemetry.h"
 #include "cloud_command.h"  // 云端远程命令: 轮询 deviceCommand → 主 loop 执行 → ack (新增模块)
 
 // ------------------- 用户配置 -------------------
@@ -644,7 +647,7 @@ void onWsEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length) {
 
 // ------------------- UART2 帧接收 (逐字节状态机) -------------------
 enum { ST_SYNC0, ST_SYNC1, ST_TYPE, ST_LEN, ST_PAYLOAD, ST_CRC };
-#define RX_BUF_SIZE 64                 // 帧解析软件缓冲: 一帧 = 4 头 + payload + 1 CRC
+#define RX_BUF_SIZE 133                 // 帧解析软件缓冲: 一帧 = 4 头 + payload + 1 CRC
 uint8_t  rxBuf[RX_BUF_SIZE];
 size_t   rxIdx = 0;
 uint8_t  rxState = ST_SYNC0;
@@ -652,11 +655,11 @@ uint8_t  rxType = 0, rxLen = 0;
 
 // ---- 帧长合法性上限 (修越界: len 是外部来的 uint8_t, 可达 255) ----
 // 现网各帧类型的负载长度: DATA=sizeof(TouchFrame)=41, METRICS=17, SCORE=4, STATUS=1。
-// 这里取"缓冲能容纳的最大负载"59 作为硬上限 (4 头 + 59 + 1 CRC = 64 = RX_BUF_SIZE),
+// 支持 108 字节触觉遥测；统一负载上限 128，帧缓冲 133 字节。
 // 而不是收紧到 41: dispatchFrame() 里用的是 "len >= sizeof(...)" 这种允许负载略大于
 // 结构体的既有宽容写法, 收紧到 41 会改变这类帧的既有行为。取 59 既不改变任何合法帧的
 // 解析结果, 又从结构上保证 4+len+1 永远不超过缓冲容量。
-static constexpr size_t FRAME_MAX_PAYLOAD = 59;
+static constexpr size_t FRAME_MAX_PAYLOAD = 128;
 static_assert(FRAME_MAX_PAYLOAD >= sizeof(TouchFrame), "FRAME_MAX_PAYLOAD 必须能容纳 TouchFrame");
 static_assert(FRAME_MAX_PAYLOAD + 5 <= RX_BUF_SIZE, "FRAME_MAX_PAYLOAD 超出 rxBuf 容量");
 
@@ -769,6 +772,7 @@ void pollUart() {
 // 分发帧
 void dispatchFrame(uint8_t type, const uint8_t *pl, uint8_t len) {
   remoteLinkFrame(type, pl, len);
+  telemetryFrame(type, pl, len);
   switch (type) {
     case FRAME_DATA: {
       if (len >= sizeof(TouchFrame)) {
@@ -1047,6 +1051,9 @@ void setup() {
   //   4096B 可容忍约 89ms 的循环抖动(云上传已挪到 core 0, 这里的余量是双保险)。
   size_t rxBufGot = STM32.setRxBufferSize(STM32_RX_BUF_SIZE);
   STM32.begin(STM32_BAUD, SERIAL_8N1, STM32_RX_PIN, STM32_TX_PIN);
+  visualBegin();
+  tactileBegin();
+  telemetryInit();
   remoteLinkBegin();
   Serial.printf("[UART] UART2 已启动: %d baud, RX 缓冲 %u 字节(请求 %d)%s\n",
                 STM32_BAUD, (unsigned)rxBufGot, (int)STM32_RX_BUF_SIZE,
