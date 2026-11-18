@@ -22,6 +22,7 @@
 //          **绝不持锁做网络**；配置走 cloudUploadGetConfig() 的既有互斥量取副本。
 // ============================================================
 #include "cloud_command.h"
+#include "cloud_wake.h"
 
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -826,7 +827,8 @@ void cloudCommandLoop()
         return;
 
     // ---- ④ 到点才 poll（固定间隔 CLOUD_CMD_POLL_MS + 失败退避）----
-    if (!timeReached(millis(), s_nextPollMs))
+    const bool wake = cloudWakeTake();
+    if (!timeReached(millis(), s_nextPollMs) && (!wake || s_failCount > 0))
         return;
     s_nextPollMs = millis() + CLOUD_CMD_POLL_MS; // 先排下一次；失败时会被退避覆盖
     doPollOnce();

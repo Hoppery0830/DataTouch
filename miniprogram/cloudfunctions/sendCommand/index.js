@@ -152,6 +152,7 @@ exports.main = async (event, context) => {
     };
 
     const added = await db.collection(COLLECTION).add({ data: doc });
+    await require("./wake").notifyDevice(deviceId);
     console.log("[sendCommand] 已写入命令", { deviceId, cmd, openid, id: added._id });
     return { ok: true, id: added._id };
   } catch (e) {

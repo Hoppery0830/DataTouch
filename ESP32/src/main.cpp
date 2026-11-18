@@ -26,6 +26,7 @@
 #include "visual_result.h"
 #include "tactile_result.h"
 #include "telemetry.h"
+#include "cloud_wake.h"
 #include "cloud_command.h"  // 云端远程命令: 轮询 deviceCommand → 主 loop 执行 → ack (新增模块)
 
 // ------------------- 用户配置 -------------------
@@ -1169,6 +1170,7 @@ void setup() {
   // 命令 URL 由"上传 URL"推导(deviceUpload → deviceCommand), 不新增任何配置项。
   // ⚠ 必须早于 cloudTask 创建(先建队列再起任务), 也要早于 loop() 第一次 drainCloudCmdQueue()。
   cloudCommandInit();
+  cloudWakeInit();
 
   // ---- SNTP 时间同步 (startedAt 需要 epoch 毫秒; 未同步时不发错误数字) ----
   // 放在 WiFi 模式确定之后: 已连 WiFi(STA/APSTA) 时发起同步; 纯 AP 配网模式下没有外网,

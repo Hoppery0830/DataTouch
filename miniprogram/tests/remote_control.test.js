@@ -16,7 +16,8 @@ function query(name,filter={}){let order='',direction=1,max=Infinity,offset=0;
 }
 const db={command:ops,collection:query,serverDate:()=>new Date()};
 const cloud={init(){},DYNAMIC_CURRENT_ENV:'test',database:()=>db,getWXContext:()=>({OPENID:'test-user'})};
-function handler(name){const module={exports:{}};const context={exports:module.exports,require:n=>{if(n==='./tactile')return require('../cloudfunctions/deviceCommand/tactile');if(n==='./visual')return require('../cloudfunctions/deviceCommand/visual');if(n==='./telemetry.js')return require('../cloudfunctions/deviceCommand/telemetry.js');assert.equal(n,'wx-server-sdk');return cloud;},console:{log(){},warn(){},error(){}},Date};
+const wakeIds = [];
+function handler(name){const module={exports:{}};const context={exports:module.exports,require:n=>{if(n==='./wake')return {notifyDevice:async deviceId=>{const doc=store.commands.at(-1);assert.equal(doc.deviceId,deviceId);assert.equal(doc.state,'pending');wakeIds.push(doc._id);}};if(n==='./tactile')return require('../cloudfunctions/deviceCommand/tactile');if(n==='./visual')return require('../cloudfunctions/deviceCommand/visual');if(n==='./telemetry.js')return require('../cloudfunctions/deviceCommand/telemetry.js');assert.equal(n,'wx-server-sdk');return cloud;},console:{log(){},warn(){},error(){}},Date};
  vm.runInNewContext(fs.readFileSync(path.join(root,'cloudfunctions',name,'index.js'),'utf8'),context);return context.exports.main;}
 const send=handler('sendCommand'),device=handler('deviceCommand');
 const poll=(extra={})=>device({action:'poll',token:'REPLACE_ME',deviceId:'dev',...extra});
@@ -35,6 +36,7 @@ const ack=(id,result,deviceId='dev')=>device({action:'ack',token:'REPLACE_ME',de
  assert.equal((await send({deviceId:'dev',cmd:'unsafe'})).ok,false);
  assert.equal((await device({action:'poll',deviceId:'dev',token:'wrong'})).ok,false);
  for(const cmd of ['mode_press','arm','start','arm','start'])assert((await send({deviceId:'dev',cmd})).ok);
+ assert.deepEqual(wakeIds,store.commands.map(doc=>doc._id));
  let p=await poll();assert.equal(p.commands.length,4);assert.equal(store.commands.filter(x=>x.state==='pending').length,1);
  const first=p.commands[0].id;assert((await ack(first,'accepted')).ok);assert.equal(store.commands[0].state,'accepted');
  await ack(first,'busy');assert.equal(store.commands[0].state,'failed');
