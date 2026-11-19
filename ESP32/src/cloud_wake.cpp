@@ -47,9 +47,18 @@ void listenForWake(void *) {
                     vTaskDelay(pdMS_TO_TICKS(1000));
                     continue;
                 }
-                client.beginSslWithCA(WAKE_HOST, 443, "/device", WAKE_CA_PEM, "");
+                // The WebSockets library leaves its client-certificate pointers
+                // uninitialized when this overload is used. Initialize them
+                // explicitly to null so the TLS client does not parse a bogus
+                // 0xA5A5A5A5 certificate pointer.
+                client.beginSslWithClientKey(WAKE_HOST, 443, "/device", WAKE_CA_PEM,
+                                              nullptr, nullptr, "");
                 client.setAuthorization("Bearer " WAKE_DEVICE_KEY);
-                client.setExtraHeaders((String("X-Device-Id: ") + id).c_str());
+                // WebSocketsClient stores this pointer for the later TLS
+                // handshake. Keep the header in a String with task lifetime.
+                static String deviceHeader;
+                deviceHeader = String("X-Device-Id: ") + id;
+                client.setExtraHeaders(deviceHeader.c_str());
                 client.onEvent(socketEvent);
                 client.setReconnectInterval(5000);
                 client.enableHeartbeat(10000, 3000, 2);
@@ -67,9 +76,8 @@ void cloudWakeInit() {
         Serial.println("[WAKE] WSS not configured; using HTTPS polling");
         return;
     }
-    // TLS handshake plus WebSocketsClient needs more than the default 8 KiB task stack.
-    // Keep this task isolated from the main cloud task so a failed handshake cannot
-    // corrupt the command polling task.
+    // Keep this task isolated from the main cloud task while the WebSocket TLS
+    // client performs its handshake.
     if (xTaskCreatePinnedToCore(listenForWake, "cloudWake", 16384, nullptr, 1, nullptr, 0) != pdPASS) {
         Serial.println("[WAKE] Could not create task; using HTTPS polling");
     }
