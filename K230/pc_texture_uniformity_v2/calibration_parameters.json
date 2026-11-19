@@ -1,0 +1,45 @@
+{
+  "score_name": "regional_texture_uniformity_score",
+  "symbol": "S_uniformity",
+  "calibration_intercept": 72.74604902853203,
+  "structure_weights": [
+    {
+      "texture_scale_pixels": 0.5,
+      "weight": 7.446789334292563
+    },
+    {
+      "texture_scale_pixels": 0.75,
+      "weight": 0.0
+    },
+    {
+      "texture_scale_pixels": 1,
+      "weight": 0.0
+    },
+    {
+      "texture_scale_pixels": 2,
+      "weight": 144.1503105491112
+    },
+    {
+      "texture_scale_pixels": 4,
+      "weight": 281.948753468757
+    }
+  ],
+  "luminance_weight": 8.117013328024164,
+  "fit_scope": "nine supplied images, internal calibration",
+  "calibration_feature_min": [
+    0.0157753966550791,
+    0.0091044414642232,
+    0.0059334532974811,
+    0.0018830059100074,
+    0.0011258498544924,
+    0.0130714318432298
+  ],
+  "calibration_feature_max": [
+    0.1642419199981958,
+    0.1225264428493026,
+    0.0981017481502146,
+    0.0520868188003473,
+    0.0343811578125464,
+    0.2024892965317557
+  ]
+}

@@ -2,6 +2,19 @@
 
 本目录包含当前部署程序、冻结的 U_curve 算法、CanMV 原生模块及状态管理修改、部署脚本和主机回归测试。
 
+## V2 区域纹理均匀度（PC）
+
+[PC 版算法入口](pc_texture_uniformity_v2/regional_texture_uniformity.py)输出区域纹理均匀度评分 `S_uniformity`。它按标定权重合成五个尺度的结构差异及区域明暗差异。评分越高表示在相同成像条件下区域越一致。标定基于九张织物图的人工评分，适用域尚未用独立织物验证。评分采用经验标定单位。
+
+在仓库根目录运行以下命令。输入应使用短边至少 896 像素且保有足够真实图像边界的原图。
+
+```powershell
+python -m pip install "numpy>=2" opencv-python
+python K230/pc_texture_uniformity_v2/regional_texture_uniformity.py "path/to/fabric.jpg"
+```
+
+程序输出 JSON，含评分、各尺度结构差异、区域明暗差异和特征是否落在标定范围内。具备 CUDA 版 PyTorch 时可添加 `--gpu`。V2 在 PC 运行，下面的板端流程使用 `U_curve`。
+
 ## 运行与保存
 
 - 默认生产模式由 F4 令牌请求触发一次测评（REMOTE_CAPTURE_ENABLED=True）；GPIO21 长按 3 秒仍可切换调试模式。模式保存在 `/sdcard/datatouch_mode.txt`。
