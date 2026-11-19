@@ -56,7 +56,7 @@ const COLLECTION = "commands";
 //      请求 sign = HMAC_SHA256(derivedKey, deviceId|action|ts|nonce|bodyHash)，
 //      云端只存 devices.secretHash，并校验 |now-ts| <= 300s 与 nonce 防重放。
 // ------------------------------------------------------------
-const SHARED_TOKEN = "REPLACE_ME";
+const SHARED_TOKEN = process.env.DEVICE_CLOUD_TOKEN || "REPLACE_ME";
 
 /**
  * ★ 命令白名单 —— 安全核心
@@ -382,3 +382,4 @@ exports.main = async (event, context) => {
     return fail(5000, "数据库操作失败：" + msg);
   }
 };
+

@@ -67,7 +67,10 @@ void cloudWakeInit() {
         Serial.println("[WAKE] WSS not configured; using HTTPS polling");
         return;
     }
-    if (xTaskCreatePinnedToCore(listenForWake, "cloudWake", 8192, nullptr, 1, nullptr, 0) != pdPASS) {
+    // TLS handshake plus WebSocketsClient needs more than the default 8 KiB task stack.
+    // Keep this task isolated from the main cloud task so a failed handshake cannot
+    // corrupt the command polling task.
+    if (xTaskCreatePinnedToCore(listenForWake, "cloudWake", 16384, nullptr, 1, nullptr, 0) != pdPASS) {
         Serial.println("[WAKE] Could not create task; using HTTPS polling");
     }
 }

@@ -52,7 +52,7 @@ const COLLECTION = "experiments";
 //      上报 sign = HMAC_SHA256(derivedKey, deviceId|dedupId|ts|nonce|bodyHash)，
 //      云端只存 devices.secretHash，并校验 |now-ts| <= 300s 与 nonce 防重放。
 // ------------------------------------------------------------
-const SHARED_TOKEN = "REPLACE_ME";
+const SHARED_TOKEN = process.env.DEVICE_CLOUD_TOKEN || "REPLACE_ME";
 
 // 四维权重（仅用于在 composite 缺省时由四维折算，权威评分仍以 STM32 为准）
 const DEFAULT_WEIGHTS = {
@@ -259,3 +259,4 @@ exports.main = async (event, context) => {
     return fail(5000, "写库失败：" + msg);
   }
 };
+
